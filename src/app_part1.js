@@ -150,8 +150,8 @@
   scene.fog = new T.FogExp2(fogColor.getHex(), 0.012);
 
   const camera = new T.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 300);
-  const CAM_START = new T.Vector3(3.0, 6.5, 12.5);
-  const CAM_END = new T.Vector3(5.2, 3.9, 12.2);
+  const CAM_START = new T.Vector3(2.4, 5.2, 13.8);
+  const CAM_END = new T.Vector3(0.45, 2.35, 11.6);
   camera.position.copy(CAM_START);
 
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -171,9 +171,9 @@
   controls.autoRotateSpeed = 0.28;
   controls.enabled = false;
 
-  // 按窗口宽高比自动调整机位距离：竖屏时拉远，保证能看到全景
-  const VIEW_TARGET = new T.Vector3(0, 4.85, 0);
-  const BASE_DIST = CAM_END.distanceTo(VIEW_TARGET) * 1.70;
+  // 按窗口宽高比自动调整机位距离：兼顾巨型树冠完整轮廓与前景花海，复刻参考图构图比例
+  const VIEW_TARGET = new T.Vector3(0, 4.35, 0);
+  const BASE_DIST = CAM_END.distanceTo(VIEW_TARGET) * 1.62;
   function fitViewDistance() {
     const aspect = window.innerWidth / window.innerHeight;
     // aspect >= 1.35 时用基准距离；越窄拉得越远
@@ -204,9 +204,14 @@
   scene.add(sun.target);
   sun.target.position.set(0, 1.0, 0);
 
-  const fill = new T.DirectionalLight(0xbcd4ff, 0.55);
-  fill.position.set(6, 3.5, -5);
+  const fill = new T.DirectionalLight(0xffe0c8, 0.92);
+  fill.position.set(-4.5, 4.2, 9.5);
   scene.add(fill);
+
+  // 树冠下方提灯暖光氛围补光：让古树干分叉、抓地盘根、木长椅与草坪笼罩在温馨的琥珀暖光中
+  const underCanopyLight = new T.PointLight(0xffad58, 1.35, 9.5, 1.5);
+  underCanopyLight.position.set(0.05, 2.65, 0.42);
+  scene.add(underCanopyLight);
 
   /* ---------- 4. 天空 ---------- */
   const skyUniforms = {
@@ -415,42 +420,110 @@
     return geo;
   }
 
-  /* ---------- 6. 圆形地台 ---------- */
+  /* ---------- 6. 圆形地台（微缩公园级泥土基底 + 树根微丘 + 深度接触阴影 AO + 垂挂草唇） ---------- */
   const islandGroup = new T.Group();
   scene.add(islandGroup);
 
+  // 全局共享地形高度函数：让树根、草簇、长椅脚、野餐垫、落花与景石 100% 严丝合缝贴合地面，杜绝悬浮
+  const TREE_BASE_XZ = { x: 0.224, z: -0.627 };
+  function islandHeightAt(x, z) {
+    const r = Math.hypot(x, z);
+    const t = clamp(r / WORLD.islandR, 0, 1.15);
+    // 基础微地形起伏
+    let y = 0.038 * fbm(x * 0.85, 0.4, z * 0.85, 2)
+          + 0.016 * fbm(x * 2.6, 1.1, z * 2.6, 2);
+    // 古树根部自然隆起的腐殖土丘（让粗壮树根从土丘中抓地而出）
+    const dxT = x - TREE_BASE_XZ.x, dzT = z - TREE_BASE_XZ.z;
+    const dTree = Math.hypot(dxT, dzT);
+    const angT = Math.atan2(dzT, dxT);
+    // 9 道与主根对齐的泥土脊线隆起
+    const rootWave = 0.5 + 0.5 * Math.cos(angT * 9.0 + 0.35);
+    const mound = (0.072 + 0.026 * rootWave) * Math.exp(-dTree * dTree * 1.15);
+    y += mound;
+    // 岛缘草皮厚唇微拱后自然下垂
+    if (t > 0.90) {
+      const u = clamp((t - 0.90) / 0.10, 0, 1);
+      y += 0.018 * Math.sin(u * Math.PI) - 0.032 * u * u;
+    }
+    return y;
+  }
+
+  // 全局共享草簇团块场（返回 0=裸露柔软泥土间隙 .. 1=茂密草簇核心），供地台泥土着色与草丛成簇分布共同读取
+  function islandClumpField(x, z) {
+    const n1 = fbm(x * 1.95 + 7.1, 0.6, z * 1.95 - 4.3, 3);
+    const n2 = fbm(x * 4.80 - 2.4, 1.8, z * 4.80 + 5.7, 2);
+    const cell = 0.5 + 0.5 * Math.sin(x * 3.4 + n1 * 3.2) * Math.cos(z * 3.4 + n2 * 3.2);
+    return clamp(n1 * 0.52 + n2 * 0.24 + cell * 0.36 - 0.12, 0.0, 1.0);
+  }
+
   function buildIsland() {
-    const SEG = 96, RINGS = 24;
+    const SEG = 128, RINGS = 40;
     const positions = [], colors = [], uvs = [], indices = [];
     const cTmp = new T.Color();
+    const colSoilWarm  = new T.Color(0.42, 0.31, 0.21); // 柔软温暖的裸露腐殖泥土
+    const colSoilDark  = new T.Color(0.24, 0.17, 0.12); // 树根/长椅底部深邃泥土 AO
+    const colMossBase  = new T.Color(0.23, 0.42, 0.15); // 温润苔绿基底
+    const colGrassLush = new T.Color(0.36, 0.58, 0.20); // 鲜活春草亮部
+    const colGrassDeep = new T.Color(0.16, 0.32, 0.11); // 草簇根部环境光遮蔽暗部
 
-    // 顶面草地（极坐标）
+    // 顶面：柔软质感泥土 + 簇状草地基底 + 树根/长椅/野餐垫深度接触阴影 AO
     for (let ri = 0; ri <= RINGS; ri++) {
       const t = ri / RINGS;
       for (let si = 0; si < SEG; si++) {
         const th = (si / SEG) * TAU;
-        const rr = Math.pow(t, 1.0) * WORLD.islandR;
-        // 边缘轮廓（与侧壁同一套起伏，避免接缝错开）
+        const rr = Math.pow(t, 0.92) * WORLD.islandR;
         const edge = 1 + 0.018 * fbm(Math.cos(th) * 2.2, 0.7, Math.sin(th) * 2.2, 2)
                        + 0.038 * Math.sin(th * 7.0 + 1.3)
                        + 0.023 * Math.sin(th * 13.0 + 0.7);
         const r = rr * edge;
         const x = Math.cos(th) * r, z = Math.sin(th) * r;
-        // 地表起伏（很轻微，主要给草的层次）
-        const y = 0.035 * fbm(x * 0.85, 0.4, z * 0.85, 2)
-                + 0.015 * fbm(x * 2.6, 1.1, z * 2.6, 2);
+        const y = islandHeightAt(x, z);
         positions.push(x, y, z);
 
-        // 草地底色：明快温润的春草绿，避免暗底把上层草叶衬成脏黑橄榄色
-        const n1 = fbm(x * 1.6 + 4, 0.8, z * 1.6 - 2, 3);
-        const n2 = fbm(x * 5.5 - 3, 1.6, z * 5.5 + 6, 2);
-        cTmp.setRGB(0.24, 0.43, 0.16);
-        cTmp.lerp(new T.Color(0.38, 0.58, 0.21), smoothstep(-0.3, 0.5, n1));
-        cTmp.lerp(new T.Color(0.17, 0.32, 0.12), smoothstep(0.1, 0.6, n2) * 0.38);
-        // 靠近边缘略深
-        cTmp.multiplyScalar(lerp(1.0, 0.82, smoothstep(0.82, 1.0, t)));
-        // 岛缘露土：草地到侧壁之间加一圈自然苔土过渡
-        cTmp.lerp(new T.Color(0.36, 0.29, 0.19), smoothstep(0.92, 1.0, t) * 0.42);
+        // 1) 饱满温润的苔绿草坪基底 + 草簇间柔和腐殖微土（保证草叶间隙浓郁饱满，绝不发灰或露白）
+        const clump = islandClumpField(x, z);
+        const microSoil = fbm(x * 8.5 + 3.1, 2.2, z * 8.5 - 1.7, 2);
+        const soilMix = smoothstep(0.36, 0.14, clump) * (0.45 + 0.55 * microSoil);
+
+        cTmp.copy(colMossBase).lerp(colGrassLush, smoothstep(0.22, 0.75, clump));
+        // 茂密草簇核心处压入一层草根 AO，让长在上方的立体草丛更具深邃体积感
+        cTmp.lerp(colGrassDeep, smoothstep(0.58, 0.92, clump) * 0.42);
+        // 草簇低谷处隐约透出柔软温润的泥土质感
+        cTmp.lerp(colSoilWarm, soilMix * 0.45);
+
+        // 2) 古树主干与 9 道抓地盘根的泥土过渡 + 深度接触阴影 (Contact AO)
+        const dxT = x - TREE_BASE_XZ.x, dzT = z - TREE_BASE_XZ.z;
+        const dTree = Math.hypot(dxT, dzT);
+        const angT = Math.atan2(dzT, dxT);
+        const rootLobe = 0.5 + 0.5 * Math.cos(angT * 9.0 + 0.35);
+        const rootZone = Math.exp(-Math.pow(dTree / (0.85 + 0.38 * rootLobe), 2.0));
+        const rootContactAO = Math.exp(-Math.pow(dTree / (0.52 + 0.28 * rootLobe), 2.2));
+        cTmp.lerp(colSoilWarm, rootZone * 0.65);
+        cTmp.lerp(colSoilDark, rootContactAO * 0.78);
+
+        // 3) 木长椅底部接触阴影与轻度踩踏露土（x ≈ -0.56, z ≈ 0.62）
+        const bx = x - (-0.56), bz = z - 0.62;
+        const cosB = Math.cos(-0.15), sinB = Math.sin(-0.15);
+        const lbx = bx * cosB - bz * sinB;
+        const lbz = bx * sinB + bz * cosB;
+        const dBench = Math.hypot(Math.max(0, Math.abs(lbx) - 0.52), Math.max(0, Math.abs(lbz) - 0.22));
+        const benchPath = Math.exp(-Math.pow( Math.hypot(lbx, lbz - 0.26) / 0.62, 2.0 ));
+        const benchAO = Math.exp(-dBench * dBench * 18.0);
+        cTmp.lerp(colSoilWarm, benchPath * 0.46);
+        cTmp.lerp(colSoilDark, benchAO * 0.68);
+
+        // 4) 野餐垫下方与四周柔和接触暗晕（x ≈ 1.25, z ≈ 1.75）
+        const px = x - 1.25, pz = z - 1.75;
+        const cosP = Math.cos(-0.32), sinP = Math.sin(-0.32);
+        const lpx = px * cosP - pz * sinP;
+        const lpz = px * sinP + pz * cosP;
+        const dPicnic = Math.hypot(Math.max(0, Math.abs(lpx) - 0.42), Math.max(0, Math.abs(lpz) - 0.30));
+        const picnicAO = Math.exp(-dPicnic * dPicnic * 22.0);
+        cTmp.lerp(colSoilDark, picnicAO * 0.56);
+
+        // 5) 岛缘厚草唇与苔土自然过渡
+        cTmp.multiplyScalar(lerp(1.0, 0.84, smoothstep(0.82, 1.0, t)));
+        cTmp.lerp(colSoilWarm, smoothstep(0.88, 1.0, t) * 0.52);
         colors.push(cTmp.r, cTmp.g, cTmp.b);
         uvs.push(x * 0.25, z * 0.25);
       }
@@ -476,45 +549,49 @@
     top.receiveShadow = true;
     islandGroup.add(top);
 
-    // 侧面土层：加深水下收拢裙边，防止波谷落下时岛底两侧露角外翻
+    // 侧面土层：圆润微缩景观地台底座（与顶面草唇严丝合缝衔接，水下自然内收，杜绝两侧突角外翻）
     const sidePos = [], sideCol = [], sideUv = [], sideIdx = [];
-    const SR = 12;
-    const segs = 96;
+    const SR = 14;
+    const segs = 128;
     for (let ri = 0; ri <= SR; ri++) {
       const t = ri / SR;
       for (let si = 0; si < segs; si++) {
         const th = (si / segs) * TAU;
-        // 轮廓：7/13 瓣低频起伏 + 细碎岩石凹凸
-        const edge = 1 + 0.038 * Math.sin(th * 7.0 + 1.3)
-                       + 0.023 * Math.sin(th * 13.0 + 0.7)
-                       + 0.022 * fbm(Math.cos(th) * 2.8 + 5, 1.7 + t * 1.4, Math.sin(th) * 2.8 - 3, 2);
-        // 上沿微鼓、向水下自然内收，彻底消除两侧突出的"托盘耳朵"
-        const bulge = 1 + 0.032 * Math.sin(Math.min(1, t * 1.35) * Math.PI) * (0.6 + 0.4 * Math.sin(th * 9.0));
-        const shrink = (1 - 0.30 * Math.pow(t, 1.45)) * bulge;
-        const r = WORLD.islandR * edge * shrink;
+        // 与 topGeo 完全一致的岛缘轮廓，保证 ri=0 处 0 缝隙闭合
+        const edge = 1 + 0.018 * fbm(Math.cos(th) * 2.2, 0.7, Math.sin(th) * 2.2, 2)
+                       + 0.038 * Math.sin(th * 7.0 + 1.3)
+                       + 0.023 * Math.sin(th * 13.0 + 0.7);
+        const rEdge = WORLD.islandR * edge;
+        const x0 = Math.cos(th) * rEdge, z0 = Math.sin(th) * rEdge;
+        const yTop = islandHeightAt(x0, z0);
+
+        // 上沿圆润饱满微鼓，向下平滑收拢成敦实的微缩公园底座
+        const lipBulge = 1.0 + 0.022 * Math.sin(Math.min(1.0, t * 1.8) * Math.PI);
+        const shrink = (1.0 - 0.34 * Math.pow(t, 1.35)) * lipBulge;
+        const r = rEdge * shrink;
         const x = Math.cos(th) * r, z = Math.sin(th) * r;
-        let y = lerp(0.0, WORLD.seatY - 0.52, Math.pow(t, 0.95));
-        // 纵向岩层侵蚀沟
-        y -= 0.028 * Math.abs(Math.sin(th * 11.0 + 0.4)) * Math.pow(t, 0.7);
+        let y = lerp(yTop, WORLD.seatY - 0.56, Math.pow(t, 0.92));
+        // 细腻泥土石阶风化肌理
+        y -= 0.016 * Math.abs(Math.sin(th * 11.0 + 0.4)) * Math.pow(t, 0.75);
         sidePos.push(x, y, z);
 
         const n = fbm(x * 1.8 + 10, y * 3.0, z * 1.8, 3);
-        if (t < 0.16) {
-          // 顶部垂挂草皮苔藓过渡带
-          cTmp.setRGB(0.24, 0.39, 0.16).lerp(new T.Color(0.35, 0.27, 0.17), t / 0.16);
-        } else if (t < 0.58) {
-          const u = (t - 0.16) / 0.42;
-          cTmp.setRGB(0.35, 0.27, 0.17).lerp(new T.Color(0.40, 0.30, 0.20), Math.sin(u * Math.PI));
-          cTmp.lerp(new T.Color(0.25, 0.19, 0.13), smoothstep(0.45, 1.0, u));
+        if (t < 0.20) {
+          // 顶部垂挂草皮苔藓厚唇过渡带
+          cTmp.setRGB(0.24, 0.42, 0.16).lerp(new T.Color(0.38, 0.29, 0.19), smoothstep(0.0, 0.20, t));
+        } else if (t < 0.62) {
+          const u = (t - 0.20) / 0.42;
+          cTmp.setRGB(0.38, 0.29, 0.19).lerp(new T.Color(0.43, 0.32, 0.22), Math.sin(u * Math.PI));
+          cTmp.lerp(new T.Color(0.26, 0.19, 0.14), smoothstep(0.42, 1.0, u));
         } else {
-          const u = (t - 0.58) / 0.42;
-          cTmp.setRGB(0.25, 0.19, 0.13).lerp(new T.Color(0.20, 0.16, 0.13), u);
+          const u = (t - 0.62) / 0.38;
+          cTmp.setRGB(0.26, 0.19, 0.14).lerp(new T.Color(0.18, 0.14, 0.11), u);
         }
-        // 横向沉积岩层纹 + 纵向凹凸阴影，破除光滑塑料感
-        const strata = 0.5 + 0.5 * Math.sin(y * 28.0 + fbm(x * 2.4, y * 2.0, z * 2.4, 2) * 3.5);
-        const gully = 0.5 + 0.5 * Math.sin(th * 24.0 + n * 4.5);
-        cTmp.multiplyScalar(0.76 + strata * 0.22 + gully * 0.16);
-        cTmp.offsetHSL(0, 0, n * 0.05);
+        // 横向腐殖土层纹 + 纵向微雕AO，呈现细腻手工微缩模型质感
+        const strata = 0.5 + 0.5 * Math.sin(y * 26.0 + fbm(x * 2.4, y * 2.0, z * 2.4, 2) * 3.2);
+        const gully = 0.5 + 0.5 * Math.sin(th * 22.0 + n * 4.2);
+        cTmp.multiplyScalar(0.80 + strata * 0.18 + gully * 0.14);
+        cTmp.offsetHSL(0, 0, n * 0.04);
         sideCol.push(cTmp.r, cTmp.g, cTmp.b);
         sideUv.push(si / segs * 4, t * 1.2);
       }
@@ -568,8 +645,8 @@
   const SEA_WAVE_GLSL = `
     float seaWaveH(vec2 p, float t){
       float d = length(p);
-      // 小岛附近压平，避免浪拍穿岛底
-      float near = smoothstep(3.2, 9.0, d);
+      // 小岛周围岸线平缓过渡，让圆形微缩地台底座完整、均匀地托浮在花海之上，避免单侧浪峰漫过前缘造成两侧残缺感
+      float near = smoothstep(4.3, 9.6, d);
       float h = 0.0;
       h += sin(dot(p, vec2(0.850, 0.527)) * 0.2010 + t * 0.52) * 0.430;
       h += sin(dot(p, vec2(0.530,-0.848)) * 0.4030 + t * 0.82) * 0.305;
@@ -589,7 +666,8 @@
         h += exp(-d2 * 0.020) * s * 1.15;
       }
 
-      return h * mix(0.18, 1.0, near) * mix(1.0, 0.55, smoothstep(60.0, 150.0, d));
+      float moat = -0.075 * (1.0 - smoothstep(3.4, 5.2, d));
+      return h * mix(0.05, 1.0, near) * mix(1.0, 0.55, smoothstep(60.0, 150.0, d)) + moat;
     }`;
 
   const seaUniforms = {
@@ -1193,19 +1271,32 @@
             mat4 im = mat4(1.0);
           #endif
           vec3 p = position;
-          vec4 base = im * vec4(0.0, 0.0, 0.0, 1.0);
-          // 顺风漂移：让整片花瓣缓慢流动，取模后仍留在原地附近
-          base.xz += uWindDir * (mod(uTime * 0.55 * uWindStr + aSeed * 40.0, 40.0) - 20.0);
-          float h = seaWaveH(base.xz, uTime);
-          // 缓慢的自转 + 上下微浮
-          float sp = uTime * (0.25 + aSeed * 0.5) + aSeed * 6.2831;
+          // 缓慢柔和的原地旋转（不再用 uTime * uWindStr 取模跳变，彻底解决花瓣乱跳与瞬移）
+          float sp = uTime * (0.14 + aSeed * 0.22) + aSeed * 6.2831;
           float cs = cos(sp), sn = sin(sp);
           p.xz = mat2(cs, -sn, sn, cs) * p.xz;
-          p.y += sin(uTime * 1.7 + aSeed * 6.2831) * 0.012;
+
+          // 先求实例在世界海面上的真实水平坐标，再加连续平滑的随波微摆
+          vec4 baseW = modelMatrix * im * vec4(0.0, 0.0, 0.0, 1.0);
+          vec2 waveSway = vec2(
+            sin(uTime * 0.45 + aSeed * 6.2831 + baseW.x * 0.25),
+            cos(uTime * 0.40 + aSeed * 5.1732 + baseW.z * 0.25)
+          ) * 0.28;
+          vec2 centerXZ = baseW.xz + waveSway;
+
+          // ★ 关键修复：直接在花瓣真实所在的位置采样浪高与波面法线斜率，保证花瓣 100% 贴合海面波浪起伏
+          float h = seaWaveH(centerXZ, uTime);
+          float hx = (seaWaveH(centerXZ + vec2(0.35, 0.0), uTime) - h) / 0.35;
+          float hz = (seaWaveH(centerXZ + vec2(0.0, 0.35), uTime) - h) / 0.35;
+          vec3 waveN = normalize(vec3(-hx, 1.0, -hz));
+
           vec4 wp = modelMatrix * im * vec4(p, 1.0);
-          wp.y += h + 0.024;
+          wp.xz += waveSway;
+          // 让花瓣顺着波面倾角自然倾斜贴附在浪面上
+          vec2 relXZ = wp.xz - centerXZ;
+          wp.y += h + 0.022 - dot(relXZ, vec2(hx, hz)) * 0.85;
           vW = wp.xyz;
-          vNw = normalize(mat3(im) * normal);
+          vNw = normalize(mix(waveN, normalize(mat3(im) * normal), 0.28));
           gl_Position = projectionMatrix * viewMatrix * wp;
         }`,
       fragmentShader: `
@@ -1250,22 +1341,23 @@
   const seaPetals = buildSeaPetals();
   regInst(seaPetals, 'seaPetals');
 
-  /* ---------- 7d. 丝带花瓣：跟随鼠标拖出飘动的花瓣带 ---------- */
-  const RIBBON_MAX_R = 34;      // 落点最大半径：保证任何视角都在画面内
-  const RIBBON_LIFE = 2.4;      // 轨迹存活时长
-  const RIBBON_MAX_PTS = 170;
+  /* ---------- 7d. 3D 丝带花瓣：三维空间流光丝绸带 + 双螺旋花瓣星流 ---------- */
+  const RIBBON_MAX_R = 28;      // 3D 空间轨迹最大半径
+  const RIBBON_LIFE = 2.8;      // 轨迹存活时长
+  const RIBBON_MAX_PTS = 160;
+  const RIBBON_SEG = 96;        // 3D 丝绸网格纵向分段数
 
   const ribbon = (function () {
     const N = 900;
     const geo = makeSeaPetalGeo();
     const mat = new T.MeshStandardMaterial({
-      color: 0xffdcea,
-      roughness: 0.92,
+      color: 0xffe4f0,
+      roughness: 0.78,
       metalness: 0.0,
-      envMapIntensity: 0.18,
+      envMapIntensity: 0.22,
       side: T.DoubleSide,
-      emissive: 0xffb8d2,
-      emissiveIntensity: 0.06,
+      emissive: 0xff9ec4,
+      emissiveIntensity: 0.38,
     });
     const inst = new T.InstancedMesh(geo, mat, N);
     inst.instanceMatrix.setUsage(T.DynamicDrawUsage);
@@ -1273,127 +1365,310 @@
     inst.visible = false;
     scene.add(inst);
 
+    // ★ 新增：真正的 3D 立体扭转流光丝绸网格（主丝带 + 副丝带双层交织）
+    function makeSilkRibbonMesh(widthScale, opacityScale) {
+      const vCnt = (RIBBON_SEG + 1) * 2;
+      const rPos = new Float32Array(vCnt * 3);
+      const rUv = new Float32Array(vCnt * 2);
+      const rIdx = [];
+      for (let i = 0; i <= RIBBON_SEG; i++) {
+        const u = i / RIBBON_SEG;
+        rUv[i * 4]     = u; rUv[i * 4 + 1] = 0;
+        rUv[i * 4 + 2] = u; rUv[i * 4 + 3] = 1;
+        if (i < RIBBON_SEG) {
+          const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+          rIdx.push(a, b, c, b, d, c);
+        }
+      }
+      const rGeo = new T.BufferGeometry();
+      const posAttr = new T.BufferAttribute(rPos, 3);
+      posAttr.setUsage(T.DynamicDrawUsage);
+      rGeo.setAttribute('position', posAttr);
+      rGeo.setAttribute('uv', new T.BufferAttribute(rUv, 2));
+      rGeo.setIndex(rIdx);
+
+      const rMat = new T.ShaderMaterial({
+        side: T.DoubleSide,
+        transparent: true,
+        depthWrite: false,
+        blending: T.AdditiveBlending,
+        uniforms: {
+          uTime: { value: 0 },
+          uOpacity: { value: opacityScale },
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          varying vec3 vWPos;
+          void main(){
+            vUv = uv;
+            vec4 wp = modelMatrix * vec4(position, 1.0);
+            vWPos = wp.xyz;
+            gl_Position = projectionMatrix * viewMatrix * wp;
+          }`,
+        fragmentShader: `
+          uniform float uTime, uOpacity;
+          varying vec2 vUv;
+          varying vec3 vWPos;
+          void main(){
+            float u = vUv.x;
+            float v = vUv.y;
+            // 首尾渐隐包络
+            float endFade = smoothstep(0.0, 0.14, u) * smoothstep(1.0, 0.82, u);
+            // 丝绸横截面高光：双侧金粉亮边 + 中心柔光丝纹
+            float centerDist = abs(v * 2.0 - 1.0);
+            float edgeRim = smoothstep(0.52, 0.92, centerDist) * smoothstep(1.0, 0.88, centerDist);
+            float silkWave = 0.5 + 0.5 * sin(u * 28.0 - uTime * 5.2 + v * 6.0);
+            float coreBody = (1.0 - centerDist * centerDist * 0.65) * (0.72 + 0.28 * silkWave);
+
+            vec3 colPink = vec3(1.0, 0.56, 0.76);
+            vec3 colGold = vec3(1.0, 0.86, 0.62);
+            vec3 colWhite = vec3(1.0, 0.96, 0.98);
+            vec3 col = mix(colPink, colGold, 0.5 + 0.5 * sin(u * 6.28 - uTime * 1.8));
+            col = mix(col, colWhite, edgeRim * 0.75 + pow(silkWave, 3.0) * 0.28);
+
+            float alpha = (coreBody * 0.46 + edgeRim * 0.62) * endFade * uOpacity;
+            gl_FragColor = vec4(col, alpha);
+          }`,
+      });
+      const mesh = new T.Mesh(rGeo, rMat);
+      mesh.frustumCulled = false;
+      mesh.visible = false;
+      scene.add(mesh);
+      return { mesh, geo: rGeo, mat: rMat, widthScale };
+    }
+
+    const silkMain = makeSilkRibbonMesh(1.0, 0.88);
+    const silkSub  = makeSilkRibbonMesh(0.52, 0.62);
+
     const rnd = new Float32Array(N * 4);
     for (let i = 0; i < N * 4; i++) rnd[i] = R();
 
     return {
-      inst, N, rnd,
+      inst, silkMain, silkSub, N, rnd,
       on: false, hover: false,
+      lastMoveT: -10,
       ndc: new T.Vector2(0, 0),
+      prevNdc: new T.Vector2(99, 99),
       trail: [],
-      smooth: { x: 0, z: 0 },
+      smooth: { x: 0, y: 2.5, z: 0 },
       hasSmooth: false,
       dummy: new T.Object3D(),
       ray: new T.Raycaster(),
-      plane: new T.Plane(new T.Vector3(0, 1, 0), -WORLD.waterY),
+      viewPlane: new T.Plane(),
       hit: new T.Vector3(),
       path: [],
+      curvePts: [],
     };
   })();
 
-  // 把鼠标投影到海面；射线近乎平行海面时，沿水平方向外推，避免"看不见"
-  function ribbonProject() {
+  // ★ 3D 空间光标投影：不再锁死在 2D 海平面，而是在相机前方的 3D 景深曲面内自由升降穿梭
+  function ribbonProject3D(t) {
     const rb = ribbon;
-    rb.ray.setFromCamera(rb.ndc, camera);
-    let tx, tz;
-    if (rb.ray.ray.intersectPlane(rb.plane, rb.hit)) {
-      tx = rb.hit.x; tz = rb.hit.z;
-    } else {
-      const d = rb.ray.ray.direction;
-      const hl = Math.hypot(d.x, d.z) || 1;
-      tx = camera.position.x + (d.x / hl) * RIBBON_MAX_R * 0.92;
-      tz = camera.position.z + (d.z / hl) * RIBBON_MAX_R * 0.92;
+    if (rb.hover && rb.ndc.distanceToSquared(rb.prevNdc) > 1e-6) {
+      rb.prevNdc.copy(rb.ndc);
+      rb.lastMoveT = t;
     }
-    const r = Math.hypot(tx, tz);
-    if (r > RIBBON_MAX_R) { const k = RIBBON_MAX_R / r; tx *= k; tz *= k; }
-    return { x: tx, z: tz };
+    const isMoving = rb.hover && (t - rb.lastMoveT < 1.8);
+
+    if (isMoving) {
+      rb.ray.setFromCamera(rb.ndc, camera);
+      // 构造穿过小岛与树冠中心、面向相机的 3D 交互平面，并叠加随角度呼吸的 Z 景深弧度
+      const camDir = new T.Vector3();
+      camera.getWorldDirection(camDir);
+      const focusDist = clamp(camera.position.distanceTo(controls.target) * 0.86, 6.5, 22.0);
+      const depthWave = Math.sin(t * 1.4 + rb.ndc.x * 2.2) * 1.65 - Math.abs(rb.ndc.x) * 1.8;
+      const planeCenter = camera.position.clone().addScaledVector(camDir, focusDist + depthWave);
+      rb.viewPlane.setFromNormalAndCoplanarPoint(camDir, planeCenter);
+
+      let tx = 0, ty = 2.8, tz = 0;
+      if (rb.ray.ray.intersectPlane(rb.viewPlane, rb.hit)) {
+        tx = rb.hit.x;
+        ty = rb.hit.y;
+        tz = rb.hit.z;
+      } else {
+        const d = rb.ray.ray.direction;
+        tx = camera.position.x + d.x * focusDist;
+        ty = camera.position.y + d.y * focusDist;
+        tz = camera.position.z + d.z * focusDist;
+      }
+      const r = Math.hypot(tx, tz);
+      if (r > RIBBON_MAX_R) { const k = RIBBON_MAX_R / r; tx *= k; tz *= k; }
+      const minFloor = WORLD.waterY + seaWaveH(tx, tz, t) + 0.35;
+      ty = clamp(ty, minFloor, 12.5);
+      return { x: tx, y: ty, z: tz };
+    } else {
+      // 鼠标静止或未悬停时：自动环绕巨型樱花树与小岛做 3D 螺旋八字漫游展示
+      const ang = t * 1.05;
+      const rad = 4.2 + Math.sin(t * 0.52) * 1.85;
+      const tx = Math.cos(ang) * rad;
+      const tz = Math.sin(ang) * rad + Math.sin(ang * 2.0) * 1.2;
+      const ty = 2.6 + Math.sin(t * 0.78) * 1.75 + Math.cos(ang * 2.0) * 0.55;
+      return { x: tx, y: ty, z: tz };
+    }
   }
 
   function updateRibbon(t, dt) {
     const rb = ribbon;
     if (!rb.on) {
       if (rb.inst.visible) rb.inst.visible = false;
+      if (rb.silkMain.mesh.visible) rb.silkMain.mesh.visible = false;
+      if (rb.silkSub.mesh.visible) rb.silkSub.mesh.visible = false;
       rb.trail.length = 0;
       rb.hasSmooth = false;
       return;
     }
 
-    // 光标 → 海面点，并做指数平滑（低通滤波，轨迹更顺）
-    if (rb.hover) {
-      const p = ribbonProject();
-      if (!rb.hasSmooth) {
-        rb.smooth.x = p.x; rb.smooth.z = p.z; rb.hasSmooth = true;
-      } else {
-        const k = Math.min(1, Math.max(0.08, dt * 16));
-        rb.smooth.x += (p.x - rb.smooth.x) * k;
-        rb.smooth.z += (p.z - rb.smooth.z) * k;
-      }
-      const last = rb.trail[rb.trail.length - 1];
-      if (!last || Math.hypot(rb.smooth.x - last.x, rb.smooth.z - last.z) > 0.10) {
-        rb.trail.push({ x: rb.smooth.x, z: rb.smooth.z, t: t });
-      }
+    // 采集 3D 目标点并做三维指数平滑滤波
+    const p = ribbonProject3D(t);
+    if (!rb.hasSmooth) {
+      rb.smooth.x = p.x; rb.smooth.y = p.y; rb.smooth.z = p.z;
+      rb.hasSmooth = true;
+    } else {
+      const k = Math.min(1, Math.max(0.08, dt * 14));
+      rb.smooth.x += (p.x - rb.smooth.x) * k;
+      rb.smooth.y += (p.y - rb.smooth.y) * k;
+      rb.smooth.z += (p.z - rb.smooth.z) * k;
+    }
+
+    // 让既有轨迹点在 3D 空间中也随微风与升力轻柔浮动，形成真实飘带感
+    for (let i = 0; i < rb.trail.length; i++) {
+      const tp = rb.trail[i];
+      tp.x += WIND.vec.x * dt * 0.22;
+      tp.z += WIND.vec.y * dt * 0.22;
+      tp.y += Math.sin(t * 2.0 + i * 0.25) * dt * 0.12;
+    }
+
+    const last = rb.trail[rb.trail.length - 1];
+    if (!last || Math.hypot(rb.smooth.x - last.x, rb.smooth.y - last.y, rb.smooth.z - last.z) > 0.06) {
+      rb.trail.push({ x: rb.smooth.x, y: rb.smooth.y, z: rb.smooth.z, t: t });
     }
 
     while (rb.trail.length && t - rb.trail[0].t > RIBBON_LIFE) rb.trail.shift();
     while (rb.trail.length > RIBBON_MAX_PTS) rb.trail.shift();
 
     const n = rb.trail.length;
-    rb.inst.visible = n >= 3;
-    if (!rb.inst.visible) return;
+    const vis = n >= 4;
+    rb.inst.visible = vis;
+    rb.silkMain.mesh.visible = vis;
+    rb.silkSub.mesh.visible = vis;
+    if (!vis) return;
 
-    // 三点滑动平均，抹掉采样折角
+    rb.silkMain.mat.uniforms.uTime.value = t;
+    rb.silkSub.mat.uniforms.uTime.value = t;
+
+    // 三点两次滑动平均，获得柔顺的 3D 空间曲线控制点
     const P = rb.path;
     P.length = 0;
     for (let i = 0; i < n; i++) {
       const a = rb.trail[Math.max(0, i - 1)];
       const b = rb.trail[i];
       const c2 = rb.trail[Math.min(n - 1, i + 1)];
-      P.push({ x: (a.x + b.x * 2 + c2.x) * 0.25, z: (a.z + b.z * 2 + c2.z) * 0.25 });
+      P.push({
+        x: (a.x + b.x * 2 + c2.x) * 0.25,
+        y: (a.y + b.y * 2 + c2.y) * 0.25,
+        z: (a.z + b.z * 2 + c2.z) * 0.25,
+      });
     }
 
-    const d = rb.dummy;
-    for (let i = 0; i < rb.N; i++) {
-      const u = i / (rb.N - 1);
+    // 采样 3D 丝带中心线与局部三维正交标架 (T, N, B)
+    function sampleRibbonFrame(u) {
       const fi = u * (n - 1);
       const i0 = Math.min(n - 1, Math.floor(fi));
       const i1 = Math.min(n - 1, i0 + 1);
       const fr = fi - i0;
       const A = P[i0], B = P[i1];
-      const x0 = A.x + (B.x - A.x) * fr;
-      const z0 = A.z + (B.z - A.z) * fr;
+      const cx = A.x + (B.x - A.x) * fr;
+      const cy = A.y + (B.y - A.y) * fr;
+      const cz = A.z + (B.z - A.z) * fr;
 
-      let dx = B.x - A.x, dz = B.z - A.z;
-      const len = Math.hypot(dx, dz) || 1;
-      dx /= len; dz /= len;
-      const nx = -dz, nz = dx;
+      const iPrev = Math.max(0, i0 - 1);
+      const iNext = Math.min(n - 1, i1 + 1);
+      let tx = P[iNext].x - P[iPrev].x;
+      let ty = P[iNext].y - P[iPrev].y;
+      let tz = P[iNext].z - P[iPrev].z;
+      const tLen = Math.hypot(tx, ty, tz) || 1;
+      tx /= tLen; ty /= tLen; tz /= tLen;
 
-      // 丝带宽度：两头收尖，中段饱满
+      // 构造与切线正交的副法线 B = T × Up
+      let bx = -tz, by = 0, bz = tx;
+      let bLen = Math.hypot(bx, by, bz);
+      if (bLen < 1e-4) { bx = 1; by = 0; bz = 0; bLen = 1; }
+      bx /= bLen; bz /= bLen;
+
+      // 主法线 N = B × T
+      const nx = by * tz - bz * ty;
+      const ny = bz * tx - bx * tz;
+      const nz = bx * ty - by * tx;
+      return { cx, cy, cz, tx, ty, tz, nx, ny, nz, bx, by, bz };
+    }
+
+    // 更新两条 3D 扭转丝绸网格顶点
+    function updateSilkGeo(silk, phaseOffset, helixRadius) {
+      const arr = silk.geo.attributes.position.array;
+      for (let i = 0; i <= RIBBON_SEG; i++) {
+        const u = i / RIBBON_SEG;
+        const F = sampleRibbonFrame(u);
+        const wProf = Math.sin(Math.PI * Math.pow(u, 0.78));
+        const halfW = 0.24 * silk.widthScale * wProf;
+
+        // 3D 空间扭转角（随路径 u 与时间 t 连续翻转，呈现真正的 3D 绸带立体翻飞）
+        const twist = u * 8.5 - t * 3.2 + phaseOffset;
+        const cs = Math.cos(twist), sn = Math.sin(twist);
+        // 丝带横向向量（在 N-B 平面内旋转）
+        const sx = F.bx * cs + F.nx * sn;
+        const sy = F.by * cs + F.ny * sn;
+        const sz = F.bz * cs + F.nz * sn;
+        // 丝带法向起伏偏移（让主副丝带在 3D 中相互缠绕）
+        const ox = (F.nx * cs - F.bx * sn) * helixRadius * wProf;
+        const oy = (F.ny * cs - F.by * sn) * helixRadius * wProf;
+        const oz = (F.nz * cs - F.bz * sn) * helixRadius * wProf;
+
+        const idx = i * 6;
+        arr[idx]     = F.cx + ox - sx * halfW;
+        arr[idx + 1] = F.cy + oy - sy * halfW;
+        arr[idx + 2] = F.cz + oz - sz * halfW;
+        arr[idx + 3] = F.cx + ox + sx * halfW;
+        arr[idx + 4] = F.cy + oy + sy * halfW;
+        arr[idx + 5] = F.cz + oz + sz * halfW;
+      }
+      silk.geo.attributes.position.needsUpdate = true;
+    }
+
+    updateSilkGeo(rb.silkMain, 0.0, 0.06);
+    updateSilkGeo(rb.silkSub, 2.2, 0.22);
+
+    // 更新环绕 3D 丝带双螺旋飞舞的 900 片立体花瓣
+    const d = rb.dummy;
+    for (let i = 0; i < rb.N; i++) {
+      const u = i / (rb.N - 1);
+      const F = sampleRibbonFrame(u);
       const wProf = Math.sin(Math.PI * Math.pow(u, 0.80));
-      const r0 = rb.rnd[i * 4], r1 = rb.rnd[i * 4 + 1], r2 = rb.rnd[i * 4 + 2];
+      const r0 = rb.rnd[i * 4], r1 = rb.rnd[i * 4 + 1], r2 = rb.rnd[i * 4 + 2], r3 = rb.rnd[i * 4 + 3];
 
-      // 只用低频摆动，看起来像布带而不是锯齿
-      const sway = Math.sin(u * 4.6 - t * 1.7) * 0.95 * wProf
-                 + Math.sin(u * 9.2 + t * 2.3) * 0.22 * wProf;
-      const side = (r0 - 0.5) * 2.0 * wProf * 1.05;
+      // 双螺旋涡流角度 + 个体三维径向散布
+      const strand = (i & 1) ? Math.PI : 0.0;
+      const spiralAng = u * 12.0 - t * 2.8 + strand + (r0 - 0.5) * 1.4;
+      const rad = (0.12 + r1 * 0.68) * wProf;
+      const offB = Math.cos(spiralAng) * rad;
+      const offN = Math.sin(spiralAng) * rad;
 
-      const x = x0 + nx * (side + sway);
-      const z = z0 + nz * (side + sway);
-      const y = WORLD.waterY + seaWaveH(x, z, t) + 0.10
-              + Math.sin(u * 6.2 - t * 2.1) * 0.26 * wProf + r1 * 0.16;
+      const x = F.cx + F.bx * offB + F.nx * offN;
+      const y = F.cy + F.by * offB + F.ny * offN;
+      const z = F.cz + F.bz * offB + F.nz * offN;
 
       d.position.set(x, y, z);
       d.rotation.set(
-        (r1 - 0.5) * 1.2 + Math.sin(t * 1.5 + u * 7.0) * 0.45,
-        r2 * TAU + t * (0.5 + r0 * 0.7),
-        (r0 - 0.5) * 1.2 + Math.cos(t * 1.3 + u * 5.5) * 0.45
+        spiralAng * 0.7 + r1 * TAU + Math.sin(t * 2.1 + u * 6.0) * 0.65,
+        r2 * TAU + t * (0.8 + r0 * 0.9),
+        (r3 - 0.5) * 1.8 + Math.cos(t * 1.7 + u * 5.5) * 0.65
       );
-      d.scale.setScalar((1.15 + r2 * 1.15) * (0.45 + wProf * 1.05));
+      d.scale.setScalar((1.05 + r2 * 1.15) * (0.35 + wProf * 1.05));
       d.updateMatrix();
       rb.inst.setMatrixAt(i, d.matrix);
     }
     rb.inst.instanceMatrix.needsUpdate = true;
   }
-  /* ---------- 7c. 浪尖飞沫：被大浪卷起来的花瓣 ---------- */
+  /* ---------- 7c. 浪尖漫舞花瓣：顺着波峰柔滑起伏（消除垂直乱跳感） ---------- */
   // 与 GLSL 里 4 处涌浪中心保持一致
   const CREST_N = 4;
   function crestCenters(t) {
@@ -1409,7 +1684,7 @@
   // JS 版浪高（与 GLSL 同步，用于确定飞沫起点）
   function seaWaveH(x, z, t) {
     const d = Math.hypot(x, z);
-    const near = smoothstep(3.2, 9.0, d);
+    const near = smoothstep(4.3, 9.6, d);
     let h = 0;
     h += Math.sin(x * 0.850 * 0.2010 + z * 0.527 * 0.2010 + t * 0.52) * 0.430;
     h += Math.sin(x * 0.530 * 0.4030 + z * -0.848 * 0.4030 + t * 0.82) * 0.305;
@@ -1426,11 +1701,12 @@
       h += Math.exp(-d2 * 0.020) * s * 1.15;
     }
     const far = 1 - smoothstep(60.0, 150.0, d) * 0.45;
-    return h * lerp(0.18, 1.0, near) * far;
+    const moat = -0.075 * (1.0 - smoothstep(3.4, 5.2, d));
+    return h * lerp(0.05, 1.0, near) * far + moat;
   }
 
   function buildSpray() {
-    const N = 1900;
+    const N = 1200;
     const geo = makeSeaPetalGeo();
     const mat = new T.MeshStandardMaterial({
       color: 0xffe4ef,
@@ -1447,7 +1723,7 @@
     scene.add(inst);
     const data = [];
     for (let i = 0; i < N; i++) {
-      data.push({ ci: 0, ox: 0, oz: 0, t: Math.random() * 3, dur: 1, vy: 0, y0: 0, sp: 0, rot: 0, rx: 0, rz: 0, sc: 1 });
+      data.push({ ci: 0, ox: 0, oz: 0, t: Math.random() * 4, dur: 3.5, vy: 0, y0: 0, sp: 0, rot: 0, rx: 0, rz: 0, sc: 1 });
     }
     return { inst, data, dummy: new T.Object3D() };
   }
@@ -1455,26 +1731,25 @@
   regInst(spray.inst, 'spray');
 
   function respawnSpray(p, tNow, crests) {
-    // 选一个"够高的涌浪"作为出生点
     let ci = Math.floor(R() * CREST_N);
     for (let k = 0; k < 3; k++) {
       if (crests[ci].s > 0.35) break;
       ci = Math.floor(R() * CREST_N);
     }
     const a = R() * TAU;
-    const rr = Math.sqrt(R()) * (3.4 + crests[ci].s * 5.2);
+    const rr = Math.sqrt(R()) * (4.0 + crests[ci].s * 6.0);
     p.ci = ci;
     p.ox = Math.cos(a) * rr;
     p.oz = Math.sin(a) * rr;
     p.t = 0;
-    p.vy = 1.5 + R() * 2.4 + crests[ci].s * 1.1;
-    p.dur = (p.vy * 2) / 3.6;
-    p.sp = 0.35 + R() * 0.9;
+    p.vy = 0.12 + R() * 0.28;
+    p.dur = 3.2 + R() * 2.4;
+    p.sp = 0.22 + R() * 0.45;
     p.rot = R() * TAU;
-    p.rx = (R() - 0.5) * 2.0;
-    p.rz = (R() - 0.5) * 2.0;
-    p.sc = 0.7 + R() * 0.9;
-    p.y0 = seaWaveH(crests[ci].x + p.ox, crests[ci].z + p.oz, tNow) + WORLD.waterY + 0.10;
+    p.rx = (R() - 0.5) * 0.55;
+    p.rz = (R() - 0.5) * 0.55;
+    p.sc = 0.75 + R() * 0.85;
+    p.y0 = WORLD.waterY;
   }
 
   function updateSpray(tNow, dt) {
@@ -1487,15 +1762,24 @@
       if (p.t > p.dur || p.t < 0) respawnSpray(p, tNow, crests);
       const c = crests[p.ci];
       const tt = p.t;
-      // 抛物线：先被浪抛起，再落下
-      const y = p.y0 + p.vy * tt - 1.8 * tt * tt;
-      // 顺风被吹偏：飞行时间越长，偏移越大
-      const wPush = tt * tt * 1.35 * WIND.strength;
-      const x = c.x + p.ox * (1 + tt * 0.28) + Math.sin(tt * 2.2 + p.rot) * 0.16 + WIND.vec.x * wPush;
-      const z = c.z + p.oz * (1 + tt * 0.28) + Math.cos(tt * 1.8 + p.rot) * 0.16 + WIND.vec.y * wPush;
+      const lifeU = clamp(tt / p.dur, 0, 1);
+      // 柔和的正弦生灭包络，彻底消除花瓣突然冒出或消失的闪跳感
+      const env = Math.sin(lifeU * Math.PI);
+
+      // 顺着海风匀速缓移（不用随帧抖动的 WIND.strength 乘 tt^2，避免位置回弹乱跳）
+      const x = c.x + p.ox + WIND.vec.x * tt * 0.55 + Math.sin(tt * 0.9 + p.rot) * 0.18;
+      const z = c.z + p.oz + WIND.vec.y * tt * 0.55 + Math.cos(tt * 0.8 + p.rot) * 0.18;
+      // 实时贴合当前(x, z)处的真实海浪高度，仅在浪尖上方轻盈掠过 0.03~0.32m
+      const waveY = WORLD.waterY + seaWaveH(x, z, tNow);
+      const y = waveY + 0.03 + env * p.vy;
+
       d.position.set(x, y, z);
-      d.rotation.set(p.rx + tt * p.sp * 2.4, p.rot + tt * p.sp * 1.6, p.rz + tt * p.sp * 1.9);
-      // 只有浪够高时才抛起花瓣，浪弱的地方不出现 → 飞沫此起彼伏\n      d.scale.setScalar(c.s < 0.52 ? 0 : p.sc * Math.min(1, (c.s - 0.52) * 3.2));
+      d.rotation.set(
+        p.rx + Math.sin(tt * p.sp + p.rot) * 0.28,
+        p.rot + tt * p.sp * 0.8,
+        p.rz + Math.cos(tt * p.sp + p.rot) * 0.28
+      );
+      d.scale.setScalar(c.s < 0.35 ? 0 : p.sc * env * Math.min(1, (c.s - 0.35) * 2.5));
       d.updateMatrix();
       spray.inst.setMatrixAt(i, d.matrix);
     }

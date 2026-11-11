@@ -145,49 +145,47 @@
   const blossomSpots = [];
   const branchGeos = [];
   const twigPts = [];          // 细枝采样点，用于判断补花"有没有枝条支撑"
+  const boughPts = [];         // 中下层主/次枝采样点，用于全宽错落悬挂提灯
 
-  /* 沿枝条撒花：段内连续插值消除"串珠/糖葫芦感"，垂枝饱满连贯且末梢自然收尖 */
-  function addBlossoms(pts, rFn, density, spread, power, scaleBase, bias, isStrand) {
+  /* 沿枝条撒花：段内连续插值 + 团簇蓬松包络，塑造吉野樱饱满云团感 */
+  function addBlossoms(pts, rFn, density, spread, power, scaleBase, bias, isFeather) {
     const steps = pts.length - 1;
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
-      // 垂枝全段保持丰满花量，仅在顶头与最末梢柔和收束；普通细枝保持向枝梢聚集
-      const w = isStrand
-        ? (0.54 + 0.58 * Math.sin(Math.PI * Math.pow(t, 0.65))) * (1.0 - 0.22 * smoothstep(0.85, 1.0, t))
+      const w = isFeather
+        ? (0.62 + 0.52 * Math.sin(Math.PI * Math.pow(t, 0.70))) * (1.0 - 0.18 * smoothstep(0.85, 1.0, t))
         : Math.pow(t, power);
       if (w < 0.02) continue;
-      // 成团：噪声决定这一簇浓不浓，制造疏密
-      const clump = smoothstep(-0.5, 0.35,
-        fbm(pts[i].x * 2.4 + 17, t * 2.2, pts[i].z * 2.4 - 5, 2));
+      // 成团：噪声决定这一簇浓不浓，制造疏密云朵团块
+      const clump = smoothstep(-0.48, 0.36,
+        fbm(pts[i].x * 2.1 + 17, t * 2.0, pts[i].z * 2.1 - 5, 2));
       const localR = rFn(t);
-      const n = Math.round(density * w * (0.35 + clump * 1.3) * bias);
+      const n = Math.round(density * w * (0.38 + clump * 1.32) * bias);
       if (n <= 0) continue;
-      // 垂枝半径在中段蓬松、末梢微收，避免底部结成大圆球
-      const spreadEnv = isStrand
-        ? spread * (0.56 + 0.46 * Math.sin(Math.PI * Math.pow(t, 0.68))) * (0.62 + clump * 0.66) * (1.0 - 0.28 * smoothstep(0.82, 1.0, t))
-        : spread * (0.42 + t * 0.75) * (0.55 + clump * 0.75);
+      const spreadEnv = isFeather
+        ? spread * (0.68 + 0.52 * Math.sin(Math.PI * Math.pow(t, 0.72))) * (0.65 + clump * 0.68)
+        : spread * (0.48 + t * 0.82) * (0.58 + clump * 0.78);
       const rr0 = localR * 1.35 + spreadEnv;
       const pPrev = pts[i - 1], pCurr = pts[i];
       for (let k = 0; k < n; k++) {
         const th = R() * TAU;
         const ph = Math.acos(2 * R() - 1);
         const rr = rr0 * Math.cbrt(R());
-        // ★ 沿 [pts[i-1], pts[i]] 黄金分割分层插值，让花朵沿枝条连续铺开而非聚成离散圆球（不额外消耗 R()）
         const segU = (k + ((k * 0.6180339887) % 1)) / n;
         const bx = lerp(pPrev.x, pCurr.x, segU);
         const by = lerp(pPrev.y, pCurr.y, segU);
         const bz = lerp(pPrev.z, pCurr.z, segU);
-        const hScale = isStrand ? 0.90 : 1.0;
-        const vScale = isStrand ? 1.08 : 0.92;
-        const tipScale = isStrand ? (1.04 - 0.24 * smoothstep(0.80, 1.0, t)) : (0.86 + t * 0.28);
+        const hScale = isFeather ? 1.05 : 1.08;
+        const vScale = isFeather ? 0.92 : 0.88;
+        const tipScale = isFeather ? (1.06 - 0.20 * smoothstep(0.82, 1.0, t)) : (0.90 + t * 0.30);
         blossomSpots.push({
           p: new T.Vector3(
             bx + Math.sin(ph) * Math.cos(th) * rr * hScale,
             by + Math.cos(ph) * rr * vScale,
             bz + Math.sin(ph) * Math.sin(th) * rr * hScale
           ),
-          rx: (R() - 0.5) * 1.7, ry: R() * TAU, rz: (R() - 0.5) * 1.7,   // 三轴随机，但不翻背
-          scale: scaleBase * (0.5 + R() * 0.72) * tipScale,
+          rx: (R() - 0.5) * 1.7, ry: R() * TAU, rz: (R() - 0.5) * 1.7,
+          scale: scaleBase * (0.54 + R() * 0.76) * tipScale,
           tint: R(),
         });
       }
@@ -199,37 +197,84 @@
     const base = new T.Vector3(TREE.x, 0, TREE.z);
     const TH = TREE.trunkH;
 
-    /* ===== 1) 根盘：从土里拱起再没入 ===== */
-    const N_ROOT = 6;
+    /* ===== 1) 苍劲抓地粗根（Chunky Stylized Roots Grabbing the Earth）：9 条浑圆主板根 + 分叉抓地侧根趾 ===== */
+    const N_ROOT = 9;
     for (let i = 0; i < N_ROOT; i++) {
-      const a = (i / N_ROOT) * TAU + R() * 0.5;
+      const a = (i / N_ROOT) * TAU + 0.35 + (R() - 0.5) * 0.22;
       const pts = [];
-      const len = 0.32 + R() * 0.17;
-      for (let k = 0; k <= 7; k++) {
-        const t = k / 7;
-        const r = lerp(0.135, len, Math.pow(t, 0.75));
-        const y = 0.055 * Math.sin(Math.PI * Math.min(1, t * 1.05)) * (1 - t * 0.85) + 0.004;
-        const wob = Math.sin(t * 2.2 + a * 2) * 0.024;
+      const len = 0.52 + R() * 0.22;
+      const hStart = 0.34 + (i % 3) * 0.055;
+      const knuckleH = 0.095 + R() * 0.035;
+      for (let k = 0; k <= 10; k++) {
+        const t = k / 10;
+        const r = lerp(0.085, len, Math.pow(t, 0.78));
+        // 从树干中下部浑厚隆起 -> 中段拱起抓地骨节(knuckle) -> 末端深深扎入泥土(y = -0.028)，彻底杜绝悬浮树根
+        const trunkBlend = Math.pow(1.0 - t, 2.3) * hStart;
+        const arch = Math.sin(Math.PI * Math.pow(t, 0.72)) * knuckleH * (1.0 - 0.35 * t);
+        const plunge = -0.032 * Math.pow(t, 2.4);
+        const y = trunkBlend + arch + plunge;
+        const wob = Math.sin(t * 2.6 + i * 1.7) * 0.026 * t;
         pts.push(new T.Vector3(
           base.x + Math.cos(a) * r + Math.cos(a + 1.57) * wob,
           y,
           base.z + Math.sin(a) * r + Math.sin(a + 1.57) * wob
         ));
       }
-      branchGeos.push(colored(tubeGeo(pts, (t) => lerp(0.078, 0.012, Math.pow(t, 0.62)), 10, true), 0x6b5340));
+      // 浑圆饱满的 Pixar 风格化粗根截面：根部粗壮(0.148)，中段骨节饱满，入土端收束
+      const rootRFn = (t) => lerp(0.148, 0.022, Math.pow(t, 0.68)) * (1.0 + 0.22 * Math.sin(t * Math.PI));
+      branchGeos.push(colored(tubeGeo(pts, rootRFn, 12, true), 0x6b5340));
+
+      // 每条主根在中外段分叉出一条抓地侧根趾（Root Toe），增强抓地力量感与根间藏草凹槽
+      const forkIdx = 4 + (i % 2);
+      const fp0 = pts[forkIdx].clone();
+      const sideSign = (i % 2 === 0) ? 1 : -1;
+      const aToe = a + sideSign * (0.34 + R() * 0.18);
+      const toeLen = 0.22 + R() * 0.12;
+      const toePts = [];
+      for (let k = 0; k <= 6; k++) {
+        const u = k / 6;
+        const tr = u * toeLen;
+        const ty = lerp(fp0.y * 0.92, -0.026, Math.pow(u, 1.25)) + Math.sin(u * Math.PI) * 0.022;
+        toePts.push(new T.Vector3(
+          fp0.x + Math.cos(aToe) * tr,
+          ty,
+          fp0.z + Math.sin(aToe) * tr
+        ));
+      }
+      const rToe0 = rootRFn(forkIdx / 10) * 0.68;
+      branchGeos.push(colored(tubeGeo(toePts, (u) => lerp(rToe0, 0.015, Math.pow(u, 0.72)), 8, true), 0x634b39));
     }
-/* ===== 2) 主干：贝塞尔 S 曲线 + 根部喇叭形加粗 ===== */
+
+    /* ===== 2) 主干：粗壮古木 S 曲线 + 纵向盘旋树筋，复刻参考图主干体量与肌理 ===== */
     const SN = 26;
     const trunkPts = [];
-    const tp0 = new T.Vector3(base.x, 0, base.z);
-    const tp1 = new T.Vector3(base.x + 0.075, TH * 0.36, base.z + 0.055);
-    const tp2 = new T.Vector3(base.x - 0.055, TH * 0.72, base.z - 0.040);
-    const tp3 = new T.Vector3(base.x + 0.030, TH, base.z + 0.015);
+    const tp0 = new T.Vector3(base.x, -0.03, base.z);
+    const tp1 = new T.Vector3(base.x - 0.045, TH * 0.35, base.z + 0.035);
+    const tp2 = new T.Vector3(base.x + 0.055, TH * 0.70, base.z - 0.030);
+    const tp3 = new T.Vector3(base.x + 0.015, TH, base.z + 0.010);
     for (let i = 0; i <= SN; i++) trunkPts.push(bezierPoint(tp0, tp1, tp2, tp3, i / SN));
 
-    // 半径：底部喇叭 → 快速收细 → 梢部缓收（幂 <1 时前段掉得快，符合真树）
-    const trunkR = (t) => lerp(0.172, 0.060, Math.pow(t, 0.58)) * (1 + 1.25 * Math.exp(-t * 8.5));
-    branchGeos.push(colored(tubeGeo(trunkPts, trunkR, 26, false), 0x6d5541));
+    // 加粗古树干半径：基部喇叭状宽厚抓地，中段苍劲，向上分入各大主枝
+    const trunkR = (t) => lerp(0.255, 0.108, Math.pow(t, 0.55)) * (1 + 1.15 * Math.exp(-t * 6.8));
+    branchGeos.push(colored(tubeGeo(trunkPts, trunkR, 28, false), 0x6d5541));
+
+    // 5 股沿主干盘旋上升的苍劲树筋（从盘根顺畅延入主干，强化古树雕塑感棱线与凹槽 AO）
+    for (let m = 0; m < 5; m++) {
+      const mPts = [];
+      const aBase = (m / 5) * TAU + 0.35;
+      for (let i = 0; i <= 18; i++) {
+        const u = i / 18;
+        const idxF = u * SN;
+        const i0 = Math.min(SN - 1, Math.floor(idxF));
+        const cp = trunkPts[i0].clone().lerp(trunkPts[i0 + 1], idxF - i0);
+        const rLocal = trunkR(u) * 0.74;
+        const ang = aBase + u * 1.10;
+        cp.x += Math.cos(ang) * rLocal;
+        cp.z += Math.sin(ang) * rLocal;
+        mPts.push(cp);
+      }
+      branchGeos.push(colored(tubeGeo(mPts, (t) => lerp(0.098, 0.032, Math.pow(t, 0.65)), 10, false), 0x68503d));
+    }
 
     // 主干切向缓存
     const trunkTan = [];
@@ -240,91 +285,110 @@
     }
     const rAt = (idx) => trunkR(idx / SN);
 
-    /* ===== 3) 递归长枝（L-system 思路：黄金角 + 长度衰减 + 半径连续） ===== */
-    function grow(start, parentDir, azimuth, len, depth, r0, bias) {
-      // 垂枝伞形：主枝先上扬、再平展，末级枝条大幅下垂（垂枝樱的形态）
-      const o = (depth === 0)
-        ? { spreadH: 0.86 + R() * 0.12, spreadV: 0.92 + R() * 0.14, droop: 0.40 + R() * 0.12,
-            inherit: 0.50, steps: 18 }
+    /* ===== 3) 递归长枝（巨型伞冠古樱：低层横展苍枝 + 中层宽幅肩冠 + 顶部饱满穹顶） ===== */
+    function grow(start, parentDir, azimuth, len, depth, r0, bias, branchMode = 0) {
+      // branchMode: 0=常规主冠, 1=中心高耸穹顶(填满正上方), 2=低层横展苍枝(展现伞下横枝与悬挂提灯)
+      const o = (branchMode === 1)
+        ? (depth === 0
+            ? { spreadH: 0.32 + R() * 0.24, spreadV: 1.08 + R() * 0.16, droop: 0.04 + R() * 0.05, inherit: 0.62, steps: 16 }
+            : depth === 1
+            ? { spreadH: 0.58 + R() * 0.18, spreadV: 0.78 + R() * 0.16, droop: 0.10 + R() * 0.08, inherit: 0.58, steps: 13 }
+            : { spreadH: 0.82 + R() * 0.16, spreadV: 0.44 + R() * 0.14, droop: 0.20 + R() * 0.10, inherit: 0.62, steps: 9 })
+        : (branchMode === 2)
+        ? (depth === 0
+            ? { spreadH: 1.24 + R() * 0.14, spreadV: 0.46 + R() * 0.12, droop: 0.12 + R() * 0.08, inherit: 0.42, steps: 18 }
+            : depth === 1
+            ? { spreadH: 1.18 + R() * 0.14, spreadV: 0.38 + R() * 0.14, droop: 0.18 + R() * 0.10, inherit: 0.54, steps: 13 }
+            : { spreadH: 1.10 + R() * 0.12, spreadV: 0.24 + R() * 0.12, droop: 0.26 + R() * 0.12, inherit: 0.64, steps: 9 })
+        : (depth === 0)
+        ? { spreadH: 1.10 + R() * 0.15, spreadV: 0.74 + R() * 0.15, droop: 0.09 + R() * 0.09,
+            inherit: 0.48, steps: 18 }
         : (depth === 1)
-        ? { spreadH: 0.98 + R() * 0.12, spreadV: 0.60 + R() * 0.14, droop: 0.88 + R() * 0.18,
-            inherit: 0.55, steps: 13 }
-        : { spreadH: 1.00 + R() * 0.10, spreadV: 0.16 + R() * 0.10, droop: 1.12 + R() * 0.22,
-            inherit: 0.62, steps: 9 };
-      const isTwig = depth >= 2;
+        ? { spreadH: 1.12 + R() * 0.14, spreadV: 0.52 + R() * 0.16, droop: 0.18 + R() * 0.12,
+            inherit: 0.56, steps: 13 }
+        : { spreadH: 1.06 + R() * 0.12, spreadV: 0.28 + R() * 0.14, droop: 0.28 + R() * 0.14,
+            inherit: 0.64, steps: 9 };
       const br = makeBranch(start, parentDir, azimuth, len, o);
 
-      // 半径：父枝局部半径的 0.62~0.72 → 分叉处粗细连续
-      const ratio = 0.62 + R() * 0.10;
-      const rr0 = Math.max(0.0042, r0 * ratio);
-      const rr1 = rr0 * (0.20 + R() * 0.12);
-      const rFn = (t) => lerp(rr0, rr1, Math.pow(t, 0.68));
+      // 半径：主枝更加粗壮有力，在花冠下方形成清晰的深色放射状枝干剪影
+      const ratio = depth === 0 ? (0.68 + R() * 0.10) : (0.64 + R() * 0.10);
+      const rr0 = Math.max(0.0055, r0 * ratio);
+      const rr1 = rr0 * (0.26 + R() * 0.12);
+      const rFn = (t) => lerp(rr0, rr1, Math.pow(t, 0.66));
       const radial = depth === 0 ? 14 : (depth === 1 ? 10 : (depth === 2 ? 7 : 5));
 
       branchGeos.push(colored(
         tubeGeo(br.pts, rFn, radial, depth >= 2),
-        depth === 0 ? 0x68513e : (depth === 1 ? 0x664f3c : 0x6e5743)
+        depth === 0 ? 0x5c4635 : (depth === 1 ? 0x624b39 : 0x6a5340)
       ));
 
-      // 花朵：只在 depth>=2 的细枝上，权重压在枝梢
-      if (depth >= 2) {
-        // 记录细枝采样点（用于外壳补花的"支撑判定"）
+      // 记录中下层横展主/次枝采样点（供提灯在树冠全宽范围悬挂）
+      if (depth === 0 || depth === 1) {
+        for (let q = 3; q < br.pts.length; q++) boughPts.push(br.pts[q]);
+      }
+
+      // 花朵：低层横枝(branchMode===2)前中段保持裸露苍枝剪影，不让花球下垂掩埋提灯与主干分叉
+      if (depth === 0) {
+        addBlossoms(br.pts, rFn, branchMode === 2 ? 6.5 : 9.5, 0.15, branchMode === 2 ? 2.6 : 1.95, 1.12, bias * 0.78, false);
+      } else if (depth === 1) {
+        for (let q = 2; q < br.pts.length; q += 2) twigPts.push(br.pts[q]);
+        addBlossoms(br.pts, rFn, 16.0, 0.155, branchMode === 2 ? 1.55 : 1.20, 1.16, bias * 0.92, false);
+      } else if (depth >= 2) {
         for (let q = 0; q < br.pts.length; q += 1) twigPts.push(br.pts[q]);
-        const dens = depth === 2 ? 22.0 : 17.0;
-        addBlossoms(br.pts, rFn, dens, depth === 2 ? 0.085 : 0.072,
-                    2.15, depth === 2 ? 1.02 : 0.96, bias);
+        const dens = depth === 2 ? 23.0 : 18.0;
+        addBlossoms(br.pts, rFn, dens, depth === 2 ? 0.135 : 0.110,
+                    1.55, depth === 2 ? 1.16 : 1.08, bias, false);
       }
 
       // 继续分叉
       if (depth < 3) {
         const nChild = depth === 0 ? 6 : (depth === 1 ? 4 : 3);
         for (let c = 0; c < nChild; c++) {
-          // 沿枝位置：偏中后段（真实树的侧枝不长在最基部）
-          const tt = 0.30 + (c / nChild) * 0.66 + R() * 0.05;
+          const tt = 0.26 + (c / nChild) * 0.68 + R() * 0.05;
           const idx = Math.min(br.steps, Math.max(1, Math.round(tt * br.steps)));
           const sp = br.pts[idx].clone();
-          // 该处切向
           const sa = br.pts[Math.max(0, idx - 1)];
           const sb = br.pts[Math.min(br.steps, idx + 1)];
           const tan = new T.Vector3().subVectors(sb, sa).normalize();
-          // 黄金角螺旋排布 + 抖动
-          const az = azimuth + GOLDEN * (c + 1) + (R() - 0.5) * 0.55;
-          const len2 = len * (depth === 0 ? 0.82 : (depth === 1 ? 0.72 : 0.60)) * (0.82 + R() * 0.34);
-          grow(sp, tan, az, len2, depth + 1, rFn(idx / br.steps), bias * (0.74 + R() * 0.5));
+          const az = azimuth + GOLDEN * (c + 1) + (R() - 0.5) * 0.52;
+          const len2 = len * (depth === 0 ? 0.84 : (depth === 1 ? 0.74 : 0.64)) * (0.84 + R() * 0.32);
+          grow(sp, tan, az, len2, depth + 1, rFn(idx / br.steps), bias * (0.76 + R() * 0.46), branchMode);
         }
       }
     }
 
-    // 主枝：从主干不同高度发出，方位按黄金角错开
-    const N_MAIN = 5;
+    // 主枝：8 根粗壮大主枝，底层 3 根横向舒展露出苍劲树骨，中上层 5 根宽扇形斜上托起巨冠
+    const N_MAIN = 8;
     for (let i = 0; i < N_MAIN; i++) {
-      const hRatio = 0.56 + (i / (N_MAIN - 1)) * 0.34 + (R() - 0.5) * 0.03;
+      const hRatio = 0.44 + (i / (N_MAIN - 1)) * 0.44 + (R() - 0.5) * 0.025;
       const idx = clamp(Math.round(hRatio * SN), 2, SN);
       const start = trunkPts[idx].clone();
-      // 起点往主干内部收一点，接头埋在干体里
-      const a0 = i * GOLDEN + R() * 0.35;
-      start.x -= Math.cos(a0) * 0.045;
-      start.z -= Math.sin(a0) * 0.045;
+      const a0 = (i / N_MAIN) * TAU + (R() - 0.5) * 0.24;
+      start.x -= Math.cos(a0) * 0.055;
+      start.z -= Math.sin(a0) * 0.055;
 
-      const len = 1.16 + R() * 0.22;
-      grow(start, trunkTan[idx], a0, len, 0, rAt(idx) * 0.78, 0.90 + R() * 0.22);
+      const sideBoost = 1.0 + 0.18 * Math.abs(Math.cos(a0));
+      const len = (1.36 + R() * 0.24) * sideBoost;
+      const mode = i < 3 ? 2 : 0;
+      grow(start, trunkTan[idx], a0, len, 0, rAt(idx) * 0.80, 0.90 + R() * 0.20, mode);
     }
 
-    // 顶梢：几根向上收拢的短枝，封顶
-    for (let i = 0; i < 4; i++) {
-      const az = i * GOLDEN + R() * 0.4;
-      grow(trunkPts[SN].clone(), trunkTan[SN], az, 0.50 + R() * 0.18, 1, rAt(SN) * 0.75, 0.85);
+    // 顶冠：7 根中心高耸穹顶主枝（使用纯垂直向上导引，填满树冠正中与右上方，形成浑圆伞状巨冠）
+    const upDir = new T.Vector3(0, 1, 0);
+    for (let i = 0; i < 7; i++) {
+      const az = (i / 7) * TAU + (R() - 0.5) * 0.22;
+      const topIdx = i < 4 ? SN : (SN - 1);
+      grow(trunkPts[topIdx].clone(), upDir, az, 1.24 + R() * 0.22, 0, rAt(topIdx) * 0.72, 0.98, 1);
     }
 
-    /* ===== 3.5) 垂枝「帘幕」：从冠缘垂下、层层错落的花帘 ===== */
+    /* ===== 3.5) 外冠迎光羽状探枝：替代原先僵直的长垂柳条，还原参考图外缘轻盈伸出的碎花枝 ===== */
     {
-      const NB = 26;          // 角度分桶
-      const N_RING = 3;       // 每桶最多几条（层层错落）
-      const N_STRAND = 66;   // 总上限
+      const NB = 28;
+      const N_FEATHER = 48;
       const cand = [];
       for (const p of twigPts) {
         const rad = Math.hypot(p.x - base.x, p.z - base.z);
-        if (rad > 0.82 && p.y > TH + 0.18) cand.push(p);
+        if (rad > 1.25 && p.y > TH * 0.72) cand.push(p);
       }
       const buckets = [];
       for (let i = 0; i < NB; i++) buckets.push([]);
@@ -333,41 +397,33 @@
         const bi = Math.floor(((a + Math.PI) / TAU) * NB) % NB;
         buckets[bi].push(p);
       }
-      // 每层垂长不同：越往外圈越短、内圈越长，形成前后层次
-      const ROUND_DROP = [1.30, 2.00, 2.60, 2.95];
       let made = 0;
-      for (let round = 0; round < N_RING && made < N_STRAND; round++) {
-        for (let bi = 0; bi < NB && made < N_STRAND; bi++) {
+      for (let round = 0; round < 2 && made < N_FEATHER; round++) {
+        for (let bi = 0; bi < NB && made < N_FEATHER; bi++) {
           const list = buckets[bi];
           if (list.length <= round) continue;
-          list.sort((A, B) => B.y - A.y);
+          // 按外展半径排序，从最外缘长出轻盈斜伸的迎光花枝
+          list.sort((A, B) => Math.hypot(B.x - base.x, B.z - base.z) - Math.hypot(A.x - base.x, A.z - base.z));
           const anchor = list[round];
           if (!anchor) continue;
           const dx = anchor.x - base.x, dz = anchor.z - base.z;
           const rad = Math.max(0.001, Math.hypot(dx, dz));
           const ox = dx / rad, oz = dz / rad;
-          // 垂长：基础分层 + 抖动，且最低点不低于草地
-          let dropL = ROUND_DROP[round] + (R() - 0.5) * 0.5;
-          dropL = Math.min(dropL, anchor.y - 0.30);
-          const outL = 0.16 + R() * 0.26 * (1 - round * 0.15);
-          const p0 = anchor.clone();
-          // 给垂枝加一点切向微弧度，避免像垂直铅垂线一样僵直
+          const outL = 0.32 + R() * 0.28;
+          const liftY = (R() - 0.42) * 0.28;
           const tx = -oz, tz = ox;
-          const sway = Math.sin(bi * 1.73 + round * 2.1) * 0.065 * dropL;
-          const p3 = new T.Vector3(
-            anchor.x + ox * (outL + 0.12) + tx * sway,
-            anchor.y - dropL,
-            anchor.z + oz * (outL + 0.12) + tz * sway
-          );
-          const p1 = new T.Vector3(anchor.x + ox * outL * 0.95, anchor.y + 0.08 + R() * 0.06, anchor.z + oz * outL * 0.95);
-          const p2 = new T.Vector3(p3.x - ox * 0.04 - tx * sway * 0.45, p3.y + dropL * 0.46, p3.z - oz * 0.04 - tz * sway * 0.45);
+          const sway = (R() - 0.5) * 0.16;
+          const p0 = anchor.clone();
+          const p1 = new T.Vector3(anchor.x + ox * outL * 0.38, anchor.y + liftY * 0.4 + 0.05, anchor.z + oz * outL * 0.38);
+          const p2 = new T.Vector3(anchor.x + ox * outL * 0.74 + tx * sway * 0.5, anchor.y + liftY * 0.8, anchor.z + oz * outL * 0.74 + tz * sway * 0.5);
+          const p3 = new T.Vector3(anchor.x + ox * outL + tx * sway, anchor.y + liftY, anchor.z + oz * outL + tz * sway);
           const pts = [];
-          const ST = 12;
+          const ST = 8;
           for (let s = 0; s <= ST; s++) pts.push(bezierPoint(p0, p1, p2, p3, s / ST));
-          const r0 = 0.009 + R() * 0.004, r1 = 0.002 + R() * 0.0014;
-          const rFn = (t) => lerp(r0, r1, Math.pow(t, 0.72));
-          branchGeos.push(colored(tubeGeo(pts, rFn, 5, false), 0x6d5541));
-          addBlossoms(pts, rFn, 44, 0.066, 1.10, 0.74, 1.0, true);
+          const r0 = 0.008 + R() * 0.003, r1 = 0.002 + R() * 0.001;
+          const rFn = (t) => lerp(r0, r1, Math.pow(t, 0.70));
+          branchGeos.push(colored(tubeGeo(pts, rFn, 5, false), 0x664f3c));
+          addBlossoms(pts, rFn, 22, 0.085, 0.95, 0.86, 1.0, true);
           made++;
         }
       }
@@ -444,30 +500,67 @@
 
     const barkMat = new T.MeshStandardMaterial({
       vertexColors: !barkAlb,
-      color: barkAlb ? new T.Color(0xe8dcc8) : 0xffffff,
+      color: barkAlb ? new T.Color(0xf6e6d4) : 0xffffff,
       map: barkAlb || barkTex,
       normalMap: barkNrm || null,
       roughnessMap: barkRgh || null,
       aoMap: barkAo || null,
-      aoMapIntensity: 0.90,
+      aoMapIntensity: 0.72,
       bumpMap: barkTex,
       bumpScale: 0.55,
-      roughness: 1.0,
+      roughness: 0.88,
       metalness: 0.0,
-      envMapIntensity: 0.0,
+      envMapIntensity: 0.45,
       flatShading: false,
     });
     if (barkNrm) { barkMat.normalScale.set(3.2, 3.2); barkMat.bumpScale = 0.09; }
-    // 枝干跟着风摆（与花朵同一风场，因此花不会被甩开）
+    // 枝干跟着风摆（与花朵同一风场，因此花不会被甩开）+ 夕阳金边与暖光漫反射提亮树皮纹理
     barkMat.onBeforeCompile = (sh) => {
       sh.uniforms.uTime = TREE_WIND.uTime;
       sh.uniforms.uWind = TREE_WIND.uWind;
       sh.uniforms.uWindDir = TREE_WIND.uWindDir;
       sh.uniforms.uGust = TREE_WIND.uGust;
-      sh.vertexShader = WIND_FIELD_GLSL + sh.vertexShader.replace(
+      sh.vertexShader = WIND_FIELD_GLSL + 'varying vec3 vBarkPos;\nvarying vec3 vBarkWorldN;\n' + sh.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
+         vBarkPos = position;
+         vBarkWorldN = normalize( mat3( modelMatrix ) * objectNormal );
          transformed += sakuraWind( position );`
+      );
+      sh.fragmentShader = 'varying vec3 vBarkPos;\nvarying vec3 vBarkWorldN;\n' + sh.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `{
+           vec3 N = normalize( vBarkWorldN );
+           // 1) Pixar/Octane 风格树皮微雕纹理 + 树干正面暖色环境补光 + 右侧落日逆光金边
+           float trunkMask = smoothstep( 2.6, 0.08, vBarkPos.y );
+           float angB = atan( vBarkPos.z, vBarkPos.x );
+           float barkRidge = 0.5 + 0.5 * sin( angB * 18.0 + vBarkPos.y * 7.5 + sin( vBarkPos.y * 4.2 + angB * 5.0 ) * 1.4 );
+           float barkFine  = 0.5 + 0.5 * sin( angB * 42.0 - vBarkPos.y * 16.0 );
+           float relief = mix( 0.68, 1.28, smoothstep( 0.22, 0.82, barkRidge * 0.72 + barkFine * 0.28 ) );
+
+           float sunRim = pow( clamp( dot( N, normalize( vec3( 0.72, 0.26, 0.48 ) ) ), 0.0, 1.0 ), 1.45 );
+           float frontFill = clamp( dot( N, normalize( vec3( -0.18, 0.32, 0.93 ) ) ), 0.0, 1.0 );
+           float lanternGlow = smoothstep( 0.35, 1.75, vBarkPos.y ) * smoothstep( 2.65, 1.35, vBarkPos.y ) * clamp( N.z * 0.6 + 0.5, 0.0, 1.0 );
+           float grassBounce = clamp( -N.y * 0.45 + 0.55, 0.0, 1.0 ) * smoothstep( 0.95, -0.02, vBarkPos.y );
+
+           vec3 warmBark = mix( vec3( 0.20, 0.12, 0.09 ), vec3( 0.48, 0.31, 0.21 ), smoothstep( 0.25, 0.85, barkRidge ) );
+           gl_FragColor.rgb *= relief;
+           gl_FragColor.rgb += (
+             warmBark * frontFill * 0.58 +
+             vec3( 0.82, 0.45, 0.20 ) * sunRim * 0.52 * relief +
+             vec3( 0.55, 0.32, 0.16 ) * lanternGlow * 0.34 +
+             vec3( 0.16, 0.26, 0.09 ) * grassBounce * 0.32
+           ) * trunkMask;
+
+           // 2) 粗壮树根抓地处：顶部鲜活青苔融合 + 根缝与底部深度接触阴影（Contact Shadows & Root AO）
+           float rootBase = 1.0 - smoothstep( -0.02, 0.26, vBarkPos.y );
+           float mossTop = clamp( N.y, 0.0, 1.0 ) * ( 1.0 - smoothstep( 0.02, 0.32, vBarkPos.y ) );
+           gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( 0.26, 0.46, 0.16 ), mossTop * 0.52 );
+           float creviceAO = ( 1.0 - smoothstep( 0.18, 0.55, barkRidge ) ) * 0.28;
+           float underRootAO = clamp( 1.0 - N.y * 0.85, 0.0, 1.0 ) * rootBase;
+           gl_FragColor.rgb *= ( 1.0 - underRootAO * 0.54 - creviceAO * trunkMask );
+         }
+         #include <dithering_fragment>`
       );
     };
     const barkMesh = new T.Mesh(trunkMerged, barkMat);
@@ -491,12 +584,12 @@
     const CROWN = {
       cx: base.x, cz: base.z,
       cy: cyMean,
-      rx: mX * 1.28, ry: mY * 0.82, rz: mZ * 1.28,
+      rx: mX * 1.15, ry: mY * 0.88, rz: mZ * 1.15,
     };
-    const TARGET_N = Math.round(blossomSpots.length * 0.96);
+    const TARGET_N = Math.round(blossomSpots.length * 1.24);
 
     // 细枝点空间网格：快速判断一个补花点附近有没有枝条
-    const CELL = 0.22;
+    const CELL = 0.24;
     const grid = new Map();
     const gkey = (ix, iy, iz) => ix + ',' + iy + ',' + iz;
     for (const p of twigPts) {
@@ -537,30 +630,30 @@
       const bump = fbm(ux * 2.1 + 11.3, uy * 2.1 - 4.7, uz * 2.1 + 8.1, 3);
 
       // 半径：外壳为主，被噪声推拉
-      const rrMax = 0.86 + bump * 0.12;
-      const rr = 0.50 + Math.cbrt(R()) * (rrMax - 0.50);
+      const rrMax = 0.88 + bump * 0.14;
+      const rr = 0.45 + Math.cbrt(R()) * (rrMax - 0.45);
 
       // ★ 成团：只在噪声高的方向堆花，低的方向留空
-      const clumpF = smoothstep(-0.30, 0.42, bump);
-      if (R() > 0.30 + clumpF * 0.70) continue;
+      const clumpF = smoothstep(-0.28, 0.40, bump);
+      if (R() > 0.32 + clumpF * 0.68) continue;
 
       let x = CROWN.cx + ux * rr * CROWN.rx;
       let y = CROWN.cy + uy * rr * CROWN.ry;
       let z = CROWN.cz + uz * rr * CROWN.rz;
-      if (y < TH * 0.62 || y > mTop * 1.02) continue;   // 限制在树冠高度内
+      if (y < TH * 0.68 || y > mTop * 1.04) continue;   // 限制在树冠高度内
 
       // 避让树干
       const dx = x - CROWN.cx, dz = z - CROWN.cz;
       const dT = Math.hypot(dx, dz);
-      if (y < TH * 1.05 && dT < 0.24) continue;
+      if (y < TH * 1.05 && dT < 0.28) continue;
 
       // ★ 支撑判定：离最近细枝超过阈值就不生成，避免"没有枝条托着的悬空花瓣"
-      if (minDistToTwig(x, y, z) > 0.32) continue;
+      if (minDistToTwig(x, y, z) > 0.36) continue;
 
       blossomSpots.push({
         p: new T.Vector3(x, y, z),
         rx: (R() - 0.5) * 1.7, ry: R() * TAU, rz: (R() - 0.5) * 1.7,
-        scale: 1.04 * (0.45 + R() * 0.85),
+        scale: 1.15 * (0.48 + R() * 0.85),
         tint: R(),
       });
     }
@@ -767,35 +860,37 @@
            c *= 0.93 + 0.11 * vBRand;
            c = mix( c, uC3, pow( edge, 2.6 ) * 0.28 );
 
-           // ★ 树冠体积光影 (Canopy AO + 花团云朵层次)：内层与底部压出暖紫粉暗部，外冠与顶部通透亮泽
-           vec3 cRel = ( vBWPos - vec3( 0.20, 4.35, -0.55 ) ) / vec3( 3.45, 2.55, 3.45 );
+           // ★ 树冠体积光影 (Canopy AO + 花团云朵层次)：适配巨型伞冠尺寸，底部花荫深邃、外冠通透亮泽
+           vec3 cRel = ( vBWPos - vec3( 0.18, 5.95, -0.45 ) ) / vec3( 5.65, 3.65, 5.65 );
            float cRad = length( cRel );
-           float shellAO = smoothstep( 0.16, 0.88, cRad ) * ( 0.62 + 0.38 * smoothstep( -0.75, 0.65, cRel.y ) );
-           // ~1.1m 尺度的花团云块起伏，让大树冠分出饱满的团块结构
+           float shellAO = smoothstep( 0.12, 0.86, cRad ) * ( 0.54 + 0.46 * smoothstep( -0.78, 0.62, cRel.y ) );
+           // 花团云块起伏，让巨型树冠分出饱满的立体团块结构
            float clumpWave = 0.5 + 0.5 * (
-             sin( vBWPos.x * 2.25 + vBWPos.y * 1.6 ) * cos( vBWPos.z * 2.25 - vBWPos.y * 1.4 ) * 0.65 +
-             sin( vBWPos.x * 4.6 - vBWPos.z * 3.8 ) * 0.35
+             sin( vBWPos.x * 1.75 + vBWPos.y * 1.35 ) * cos( vBWPos.z * 1.75 - vBWPos.y * 1.25 ) * 0.65 +
+             sin( vBWPos.x * 3.6 - vBWPos.z * 3.1 ) * 0.35
            );
-           float occ = clamp( shellAO * ( 0.78 + 0.32 * clumpWave ), 0.0, 1.0 );
-           vec3 innerTint = vec3( 0.83, 0.62, 0.74 );   // 树冠深处暖紫粉暗部
-           vec3 outerTint = vec3( 1.06, 0.99, 0.98 );   // 树冠外缘柔亮粉白
+           float occ = clamp( shellAO * ( 0.74 + 0.36 * clumpWave ), 0.0, 1.0 );
+           vec3 innerTint = vec3( 0.74, 0.51, 0.67 );   // 树冠深处与横枝上方浓郁紫粉花荫
+           vec3 outerTint = vec3( 1.07, 0.99, 0.98 );   // 树冠外缘柔亮粉白
            c *= mix( innerTint, outerTint, occ );
 
            diffuseColor.rgb *= c;
          }`)
           .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
          {
-           // 次表面透光 (SSS) + 树冠迎光金粉镶边
+           // 次表面透光 (SSS) + 夕阳穿透树冠的金粉暖光
            vec3 Nw = normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz );
            vec3 Vw = normalize( cameraPosition - vBWPos );
-           vec3 cRel = ( vBWPos - vec3( 0.20, 4.35, -0.55 ) ) / vec3( 3.45, 2.55, 3.45 );
-           vec3 domeDir = normalize( cRel + vec3( 0.0, 0.35, 0.0 ) );
-           float domeSun = pow( clamp( dot( domeDir, normalize( uSunDir ) ) * 0.5 + 0.5, 0.0, 1.0 ), 1.6 );
-           float outerShell = smoothstep( 0.30, 0.95, length( cRel ) );
+           vec3 cRel = ( vBWPos - vec3( 0.18, 5.95, -0.45 ) ) / vec3( 5.65, 3.65, 5.65 );
+           vec3 domeDir = normalize( cRel + vec3( 0.0, 0.32, 0.0 ) );
+           float domeSun = pow( clamp( dot( domeDir, normalize( uSunDir ) ) * 0.5 + 0.5, 0.0, 1.0 ), 1.5 );
+           // 右侧与外冠迎向夕阳处的穿透金辉
+           float sunSide = smoothstep( -0.2, 0.75, cRel.x ) * smoothstep( -0.45, 0.45, cRel.y );
+           float outerShell = smoothstep( 0.25, 0.92, length( cRel ) );
            float rim  = pow( clamp( 1.0 - abs( dot( Nw, Vw ) ), 0.0, 1.0 ), 1.8 );
            float back = pow( clamp( dot( -Nw, uSunDir ), 0.0, 1.0 ), 1.15 );
-           vec3 sssCol = mix( uC1, vec3( 1.0, 0.92, 0.86 ), 0.55 * domeSun );
-           float sss = ( rim * 0.055 + back * 0.065 + domeSun * outerShell * 0.048 ) * uSSS * ( 0.75 + 0.40 * vBRand );
+           vec3 sssCol = mix( uC1, vec3( 1.04, 0.88, 0.76 ), clamp( 0.50 * domeSun + 0.38 * sunSide, 0.0, 1.0 ) );
+           float sss = ( rim * 0.058 + back * 0.068 + ( domeSun * outerShell + sunSide * 0.55 ) * 0.055 ) * uSSS * ( 0.75 + 0.40 * vBRand );
            totalEmissiveRadiance += sssCol * sss;
          }`);
     };
@@ -826,31 +921,51 @@
 
   buildSakura();
 
-  // 整体放大：以树根为中心等比缩放，底部保持在 y=0
-  const TREE_SCALE = 1.98;
+  // ★ 整体放大至 2.24（配合宽幅放射主枝，让巨型樱花树冠像参考图一样横跨小岛两侧且左右完整入画）
+  const TREE_SCALE = 2.24;
   treeGroup.scale.setScalar(TREE_SCALE);
 
   PROG(42, '生长枝干');
   await yieldFrame();
 
-  buildBlossoms();          // 2 万多朵花的实例化（较重）
+  buildBlossoms();          // 花朵实例化
   regInst(blossomMesh, 'blossom');
 
-  /* ---------- 8b. 树枝小灯笼（和纸圆润提灯 + 竹骨渐变 + 暖金吊绳 + 随风同摆） ---------- */
+  /* ---------- 8b. 树枝小灯笼（全宽横枝错落悬挂 + 和纸圆润提灯 + 竹骨暖芯渐变） ---------- */
   const lanternMats = [];
   const lanternGroups = [];
   function buildLanterns() {
-    // 挑选树冠中下层（局部 y ∈ [1.55, 2.48] 中偏下沿）的细枝采样点，让灯笼垂在枝干分叉下方的通透空间
-    const pool = twigPts.filter(p => p.y > 1.55 && p.y < 2.48);
-    pool.sort((a, b) => a.y - b.y);
-    const cands = pool.slice(0, Math.max(40, Math.floor(pool.length * 0.55)));
-    if (!cands.length) return;
+    // 从向左右两侧宽幅伸展的中下层主/次枝中，按横向分区挑选 8 处正侧方挂点，重现参考图全宽垂挂提灯的剪影
+    const allPts = boughPts.concat(twigPts);
+    const pool = allPts.filter(p => {
+      const r = Math.hypot(p.x - TREE.x, p.z - TREE.z);
+      // 优先选择朝向镜头或左右两侧（z >= TREE.z - 0.30）的中低层横枝，避免被树干或后方花冠遮挡
+      return p.y > 1.18 && p.y < 2.05 && r > 0.38 && r < 2.05 && Math.abs(p.x - TREE.x) > 0.24 && p.z >= TREE.z - 0.30;
+    });
+    if (!pool.length) return;
+
+    // 分成左远、左中、左近、左内、右内、右近、右中、右远 8 个横向区间，保证左右两侧横枝下都有错落分布的灯笼
     const picks = [];
-    const MIN_D = 0.52;
+    const MIN_D = 0.38;
+    const xBins = [-1.95, -1.35, -0.95, -0.58, -0.22, 0.24, 0.62, 1.02, 1.45, 1.95];
+    for (let bi = 0; bi < xBins.length - 1; bi++) {
+      if (bi === 4) continue; // 跳过树干正中区间
+      const x0 = TREE.x + xBins[bi], x1 = TREE.x + xBins[bi + 1];
+      const sub = pool.filter(p => p.x >= x0 && p.x < x1);
+      if (!sub.length) continue;
+      sub.sort((a, b) => a.y - b.y);
+      const lowSub = sub.slice(0, Math.max(5, Math.floor(sub.length * 0.40)));
+      for (let k = 0; k < 40; k++) {
+        const p = lowSub[Math.floor(R() * lowSub.length)];
+        let ok = true;
+        for (const q of picks) if (p.distanceTo(q) < MIN_D) { ok = false; break; }
+        if (ok) { picks.push(p); break; }
+      }
+    }
     let guard = 0;
-    while (picks.length < 9 && guard < 4000) {
+    while (picks.length < 9 && guard < 3000) {
       guard++;
-      const p = cands[Math.floor(R() * cands.length)];
+      const p = pool[Math.floor(R() * pool.length)];
       let ok = true;
       for (const q of picks) if (p.distanceTo(q) < MIN_D) { ok = false; break; }
       if (ok) picks.push(p);
@@ -897,9 +1012,9 @@
 
     const capMat = new T.MeshStandardMaterial({ color: 0x2c1d14, roughness: 0.82, metalness: 0.08 });
     attachWind(capMat, false);
-    // 吊绳加粗并带暖金受光感，远景也能清晰看出灯笼是挂在枝头的
+    // 纤细深色吊线（不再像粗木棍），贴合参考图精致垂线
     const cordMat = new T.MeshStandardMaterial({
-      color: 0xd8a868, emissive: 0x8c5822, emissiveIntensity: 0.58, roughness: 0.75, metalness: 0,
+      color: 0x3b281c, emissive: 0x4a2c16, emissiveIntensity: 0.25, roughness: 0.85, metalness: 0,
     });
     attachWind(cordMat, false);
     const tasselMat = new T.MeshStandardMaterial({
@@ -924,12 +1039,22 @@
 
     for (const p of picks) {
       const g = new T.Group();
-      const drop = 0.28 + R() * 0.14;
-      const R0 = 0.046 + R() * 0.012;
-      const H = 0.102 + R() * 0.024;
+      const outSpan = Math.abs(p.x - TREE.x);
+      // 自动检测挂点正下方的花簇最低高度，让吊绳自然垂落至花丛下沿之外，绝不半截埋在花里
+      let minBlossomY = p.y;
+      for (let bi = 0; bi < blossomSpots.length; bi += 3) {
+        const bp = blossomSpots[bi].p;
+        if (Math.abs(bp.x - p.x) < 0.18 && Math.abs(bp.z - p.z) < 0.22 && bp.y < minBlossomY) {
+          minBlossomY = bp.y;
+        }
+      }
+      const clearDrop = Math.max(0.18, (p.y - minBlossomY) + 0.04 + R() * 0.08);
+      const drop = clamp(clearDrop, 0.18 + 0.04 * outSpan, 0.56);
+      const R0 = 0.046 + R() * 0.010;
+      const H = 0.104 + R() * 0.020;
 
-      // 吊绳（上端直接连到枝条采样点）
-      const cord = new T.Mesh(new T.CylinderGeometry(0.012, 0.012, drop, 6), cordMat);
+      // 纤细吊绳（上端直接连到枝条采样点）
+      const cord = new T.Mesh(new T.CylinderGeometry(0.0038, 0.0038, drop, 6), cordMat);
       cord.position.set(p.x, p.y - drop / 2, p.z);
       g.add(cord);
 

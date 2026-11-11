@@ -291,6 +291,15 @@
     hemi.color.setHex(p.hemiSky);
     hemi.groundColor.setHex(p.hemiGnd);
     hemi.intensity = p.hemiInt;
+    if (typeof underCanopyLight !== 'undefined') {
+      const lanternStr = name === 'night' ? 2.15 : (name === 'dusk' ? 1.45 : (name === 'morning' ? 0.55 : 0.35));
+      underCanopyLight.intensity = lanternStr;
+      underCanopyLight.color.setHex(name === 'night' ? 0xff9d42 : 0xffb366);
+    }
+    if (typeof fill !== 'undefined') {
+      fill.intensity = name === 'night' ? 0.36 : (name === 'dusk' ? 0.94 : 0.78);
+      fill.color.setHex(name === 'night' ? 0x6882b8 : 0xffe0c8);
+    }
     scene.fog.color.setHex(p.fog);
     scene.fog.density = p.fogD;
     post.uniforms.uExposure.value = p.exposure;
@@ -761,7 +770,7 @@
   setWeather('sunny');
 
 
-  /* ---------- 18c. 音频氛围（WebAudio 程序化，默认静音） ---------- */
+  /* ---------- 18c. 音频氛围 + 樱花五声古筝/八音盒 BGM（WebAudio 程序化，默认静音） ---------- */
   let actx = null;
   function initAudio() {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -791,7 +800,7 @@
     lp.Q.value = 0.6;
 
     const gWaves = ctx.createGain();
-    gWaves.gain.value = 0.55;
+    gWaves.gain.value = 0.36;
 
     src.connect(lp); lp.connect(gWaves); gWaves.connect(master);
 
@@ -800,7 +809,7 @@
     lfo.type = 'sine';
     lfo.frequency.value = 0.085;
     const lfoAmt = ctx.createGain();
-    lfoAmt.gain.value = 0.30;
+    lfoAmt.gain.value = 0.18;
     lfo.connect(lfoAmt); lfoAmt.connect(gWaves.gain);
 
     // 第二层：高通风声，更"沙沙"
@@ -808,10 +817,101 @@
     hp.type = 'highpass';
     hp.frequency.value = 1400;
     const gWind = ctx.createGain();
-    gWind.gain.value = 0.055;
+    gWind.gain.value = 0.038;
     const src2 = ctx.createBufferSource();
     src2.buffer = buf; src2.loop = true;
     src2.connect(hp); hp.connect(gWind); gWind.connect(master);
+
+    // 第三层：立体声延迟混响总线 + 樱花五声/平调子（Koto & Celesta）治愈系旋律与温暖弦垫
+    const bgmBus = ctx.createGain();
+    bgmBus.gain.value = 0.78;
+    bgmBus.connect(master);
+
+    const delayL = ctx.createDelay(2.0);
+    const delayR = ctx.createDelay(2.0);
+    delayL.delayTime.value = 0.36;
+    delayR.delayTime.value = 0.52;
+    const fb = ctx.createGain();
+    fb.gain.value = 0.38;
+    const wet = ctx.createGain();
+    wet.gain.value = 0.34;
+    const dFilter = ctx.createBiquadFilter();
+    dFilter.type = 'lowpass';
+    dFilter.frequency.value = 2200;
+    bgmBus.connect(delayL);
+    delayL.connect(dFilter);
+    dFilter.connect(delayR);
+    delayR.connect(fb);
+    fb.connect(delayL);
+    delayL.connect(wet);
+    delayR.connect(wet);
+    wet.connect(master);
+
+    // 柔和温暖的 D 大调五声环境垫音（D3 + A3 + F#4）
+    const padFreqs = [146.83, 220.00, 369.99];
+    for (let k = 0; k < padFreqs.length; k++) {
+      const pOsc = ctx.createOscillator();
+      pOsc.type = 'sine';
+      pOsc.frequency.value = padFreqs[k];
+      const pGain = ctx.createGain();
+      pGain.gain.value = 0.045;
+      pOsc.connect(pGain);
+      pGain.connect(bgmBus);
+      pOsc.start();
+    }
+
+    // 拨弦古筝 / 空灵八音盒旋律序列（D 大调与都节五声交融）
+    const phrase = [
+      { f: 587.33, d: 0.75 }, { f: 659.25, d: 0.75 }, { f: 739.99, d: 1.20 }, { f: 880.00, d: 0.90 },
+      { f: 739.99, d: 0.75 }, { f: 659.25, d: 0.75 }, { f: 587.33, d: 1.35 }, { f: 440.00, d: 1.05 },
+      { f: 493.88, d: 0.75 }, { f: 587.33, d: 0.75 }, { f: 659.25, d: 1.20 }, { f: 493.88, d: 0.90 },
+      { f: 440.00, d: 0.85 }, { f: 369.99, d: 0.85 }, { f: 293.66, d: 1.65 }, { f: 440.00, d: 1.15 },
+    ];
+    let stepIdx = 0;
+    function pluckNote(freq, dur, isBell) {
+      if (!audioOn || ctx.state !== 'running') return;
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      osc1.type = isBell ? 'sine' : 'triangle';
+      osc2.type = 'sine';
+      osc1.frequency.setValueAtTime(freq, now);
+      osc2.frequency.setValueAtTime(freq * 2.0, now);
+
+      const flt = ctx.createBiquadFilter();
+      flt.type = 'lowpass';
+      flt.frequency.setValueAtTime(freq * 4.5, now);
+      flt.frequency.exponentialRampToValueAtTime(freq * 1.3, now + dur * 1.4);
+
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(0.0001, now);
+      env.gain.linearRampToValueAtTime(isBell ? 0.11 : 0.16, now + 0.018);
+      env.gain.exponentialRampToValueAtTime(0.0008, now + dur * 1.85);
+
+      const g2 = ctx.createGain();
+      g2.gain.value = 0.25;
+      osc1.connect(flt);
+      osc2.connect(g2);
+      g2.connect(flt);
+      flt.connect(env);
+      env.connect(bgmBus);
+
+      osc1.start(now);
+      osc2.start(now);
+      osc1.stop(now + dur * 1.9);
+      osc2.stop(now + dur * 1.9);
+    }
+
+    function scheduleNext() {
+      const note = phrase[stepIdx % phrase.length];
+      pluckNote(note.f, note.d, stepIdx % 4 === 2);
+      if (stepIdx % 4 === 0) {
+        pluckNote(note.f * 0.5, note.d * 1.6, false);
+      }
+      stepIdx++;
+      setTimeout(scheduleNext, Math.round(note.d * 720));
+    }
+    setTimeout(scheduleNext, 300);
 
     src.start(); src2.start(); lfo.start();
     return { ctx, master };
@@ -1055,10 +1155,157 @@
 
   applyQuality();                    // 应用当前质量档（默认高）
 
+  const TOUR_MODE = location.hash.indexOf('tour') >= 0;
+  let tourCaptionEl = null;
+  if (TOUR_MODE) {
+    introT = INTRO_DUR;
+    controls.enabled = true;
+    applyFitView();
+    post.uniforms.uFade.value = 1;
+    const ld = document.getElementById('loader');
+    if (ld) ld.classList.add('done');
+    QUALITY.auto = false;
+    setQualityTier(2); // 录制视频固定最高画质
+
+    // 宣传片右上角精致毛玻璃特性导览角标
+    tourCaptionEl = document.createElement('div');
+    tourCaptionEl.style.cssText = [
+      'position:fixed', 'top:26px', 'right:32px', 'z-index:30',
+      'padding:10px 18px', 'border-radius:999px',
+      'background:rgba(28,18,26,0.52)', 'backdrop-filter:blur(12px)',
+      'border:1px solid rgba(255,216,230,0.32)',
+      'color:#fff5f8', 'font:500 13px/1.4 "PingFang SC","Microsoft YaHei",sans-serif',
+      'letter-spacing:0.06em', 'box-shadow:0 8px 28px rgba(0,0,0,0.28)',
+      'pointer-events:none', 'transition:opacity 0.25s ease'
+    ].join(';');
+    document.body.appendChild(tourCaptionEl);
+  }
+
+  // 确定性逐帧步进：供宣传片录制脚本按帧号 i / total 精确驱动全场景动画、镜头与特效
+  window.__TOUR_SEEK__ = function (i, total) {
+    const N = Math.max(2, total || 300);
+    const u = clamp(i / (N - 1), 0, 1);
+    const dt = 1 / 25;
+    elapsed = i * dt + 4.0;
+    introT = INTRO_DUR;
+    post.uniforms.uFade.value = 1;
+
+    // 四幕产品亮点编排
+    let capText = '';
+    if (u < 0.28) {
+      if (state.time !== 'dusk') applyTime('dusk');
+      if (state.weather !== 'sunny') setWeather('sunny');
+      ribbon.on = false;
+      ribbon.hover = false;
+      capText = '01 · 巨冠垂枝樱 × 翻涌花瓣海 × 3D 飞鸟群';
+    } else if (u < 0.56) {
+      const wantT = u < 0.41 ? 'dusk' : 'afternoon';
+      if (state.time !== wantT) applyTime(wantT);
+      if (state.weather !== 'sunny') setWeather('sunny');
+      ribbon.on = false;
+      ribbon.hover = false;
+      capText = '02 · 抓地盘根 × 成簇立体春草 × 厚木倒角长椅 × 樱饼野餐';
+    } else if (u < 0.78) {
+      if (state.time !== 'morning') applyTime('morning');
+      if (state.weather !== 'sunny') setWeather('sunny');
+      if (i === Math.floor(N * 0.57) || i === Math.floor(N * 0.66)) {
+        triggerPetalBurst();
+      }
+      ribbon.on = true;
+      ribbon.hover = true;
+      const ru = (u - 0.56) / 0.22;
+      const rAng = ru * TAU * 1.35;
+      ribbon.ndc.set(Math.cos(rAng) * 0.42, Math.sin(rAng * 2.0) * 0.24 + 0.04);
+      capText = '03 · 3D 绸缎丝带穿林 × 点树摇落花雨 × 晨昏晴雨实时切换';
+    } else {
+      const wantNight = u < 0.91;
+      const tMode = wantNight ? 'night' : 'dusk';
+      if (state.time !== tMode) applyTime(tMode);
+      ribbon.on = false;
+      ribbon.hover = false;
+      fireflyAmt = wantNight ? 1.0 : 0.0;
+      capText = wantNight
+        ? '04 · 静谧星夜 · 八盏和纸提灯暖光 × 260 只流萤绕树飞舞'
+        : '樱花树下 · Sakura Isle · 单文件离线 3D 微缩世界';
+    }
+    if (tourCaptionEl) tourCaptionEl.textContent = capText;
+    const btnR = document.getElementById('btnRibbon');
+    if (btnR) btnR.classList.toggle('on', ribbon.on);
+
+    // 电影感平滑运镜轨迹（全景大远景 -> 树下长椅/盘根/野餐微距特写 -> 丝带飞舞中景 -> 星夜与黄昏全景主视觉收束）
+    const smoothU = (a, b, x) => smoothstep(a, b, x);
+    let angle, rad, camY, tgtX, tgtY, tgtZ;
+    if (u < 0.28) {
+      const k = smoothU(0.0, 0.28, u);
+      angle = lerp(0.26, -0.14, k);
+      rad   = lerp(18.80, 16.50, k);
+      camY  = lerp(1.55, 1.45, k);
+      tgtX  = lerp(0.12, -0.05, k);
+      tgtY  = lerp(4.35, 3.95, k);
+      tgtZ  = 0.0;
+    } else if (u < 0.56) {
+      const k = smoothU(0.28, 0.56, u);
+      const arch = Math.sin(k * Math.PI);
+      angle = lerp(-0.14, 0.34, k);
+      rad   = lerp(16.50, 6.45, arch);
+      camY  = lerp(1.45, 1.38, arch);
+      tgtX  = lerp(-0.05, 0.18, k);
+      tgtY  = lerp(3.95, 1.08, arch);
+      tgtZ  = lerp(0.0, 0.45, arch);
+    } else if (u < 0.78) {
+      const k = smoothU(0.56, 0.78, u);
+      angle = lerp(0.34, -0.24, k);
+      rad   = lerp(9.20, 13.80, k);
+      camY  = lerp(1.75, 1.65, k);
+      tgtX  = lerp(0.15, 0.0, k);
+      tgtY  = lerp(2.35, 3.65, k);
+      tgtZ  = lerp(0.20, 0.0, k);
+    } else {
+      const k = smoothU(0.78, 1.0, u);
+      angle = lerp(-0.24, 0.038, k);
+      rad   = lerp(13.80, 18.60, k);
+      camY  = lerp(1.65, 1.32, k);
+      tgtX  = 0.0;
+      tgtY  = lerp(3.65, 4.35, k);
+      tgtZ  = 0.0;
+    }
+
+    camera.position.set(Math.sin(angle) * rad, camY, Math.cos(angle) * rad);
+    controls.target.set(tgtX, tgtY, tgtZ);
+    camera.lookAt(tgtX, tgtY, tgtZ);
+    camera.updateMatrixWorld();
+
+    updateWind(elapsed);
+    blossomUniforms.uTime.value = elapsed;
+    grassUniforms.uTime.value = elapsed;
+    waterUniforms.uTime.value = elapsed;
+    skyUniforms.uTime.value = elapsed;
+    if (typeof shaftUniforms !== 'undefined') shaftUniforms.uTime.value = elapsed;
+    if (typeof updateBeams === 'function') updateBeams();
+    updateSpray(elapsed, dt);
+    updateFireflies(elapsed, dt);
+    updateDust(elapsed);
+    updateCreatures(elapsed, dt);
+    updatePetalBurst(dt);
+    updateRibbon(elapsed, dt);
+    petalUniforms.uTime.value = elapsed;
+    updateWeather(dt);
+    updatePetals(elapsed, dt);
+    blossomUniforms.uSunDir.value.copy(skyUniforms.uSunDir.value);
+    post.render(dt);
+    window.__TOUR_FRAME__ = i;
+    return true;
+  };
+
   INTRO_START = performance.now();   // 分帧构建会耗时，开场动画从真正开始时计时
   PROG(100, '就绪');
   window.__hideLoader && window.__hideLoader();
-  animate();
+  window.__TOUR_READY__ = true;
+  if (!TOUR_MODE) {
+    animate();
+  } else {
+    window.__TOUR_SEEK__(0, 300);
+  }
 
   window.__sakura = {
     setTime: applyTime,

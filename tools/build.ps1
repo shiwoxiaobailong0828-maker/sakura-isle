@@ -4,12 +4,21 @@ if ([string]::IsNullOrEmpty($Out)) { $Out = Join-Path $root "dist\index.html" }
 $src = Join-Path $root "src"
 
 $nl = [char]10
+# Concatenate app_part1..4.js -> app.js
+$parts = @(
+  [System.IO.File]::ReadAllText("$src\app_part1.js", [System.Text.Encoding]::UTF8),
+  [System.IO.File]::ReadAllText("$src\app_part2.js", [System.Text.Encoding]::UTF8),
+  [System.IO.File]::ReadAllText("$src\app_part3.js", [System.Text.Encoding]::UTF8),
+  [System.IO.File]::ReadAllText("$src\app_part4.js", [System.Text.Encoding]::UTF8)
+)
+[System.IO.File]::WriteAllText("$src\app.js", ($parts -join $nl), (New-Object System.Text.UTF8Encoding($false)))
+
 $shell = [System.IO.File]::ReadAllText("$src\shell.html", [System.Text.Encoding]::UTF8)
 $core  = [System.IO.File]::ReadAllText("$src\vendor\three.iife.js", [System.Text.Encoding]::UTF8)
 $orbit = [System.IO.File]::ReadAllText("$src\vendor\orbit-controls.js", [System.Text.Encoding]::UTF8)
 $app   = [System.IO.File]::ReadAllText("$src\app.js", [System.Text.Encoding]::UTF8)
 
-# ---- 注入贴图（base64）----
+# Inject base64 textures
 $texWeb = Join-Path $root "textures\web"
 function Get-B64([string]$name) {
   $p = Join-Path $texWeb $name
