@@ -1,0 +1,25 @@
+{
+  "port": 9333,
+  "file": "E:\\AIGC\\html\\sakura\\dist\\index.html",
+  "width": 1400,
+  "height": 950,
+  "wait": 60000,
+  "steps": [
+    {
+      "name": "tex",
+      "eval": "(()=>{const s=__sakura.scene;let r={mapImg:0,normImg:0,roughImg:0,aoImg:0,env:!!s.environment,envType:s.environment&&s.environment.mapping};s.traverse(o=>{if(o.isMesh&&o.material){const m=o.material;if(m.map&&m.map.image)r.mapImg++;if(m.normalMap&&m.normalMap.image)r.normImg++;if(m.roughnessMap&&m.roughnessMap.image)r.roughImg++;if(m.aoMap&&m.aoMap.image)r.aoImg++;}});return r;})()"
+    },
+    {
+      "name": "close",
+      "eval": "__sakura.setCamera(1.15,2.15,2.55,0.10,2.15,-0.28)",
+      "out": "E:\\AIGC\\html\\_build\\probe_close.png",
+      "settle": 3000
+    },
+    {
+      "name": "trunk",
+      "eval": "__sakura.setCamera(0.65,1.35,1.05,0.10,1.25,-0.28)",
+      "out": "E:\\AIGC\\html\\_build\\probe_trunk.png",
+      "settle": 3000
+    }
+  ]
+}

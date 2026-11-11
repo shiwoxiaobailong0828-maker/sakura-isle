@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>樱花树下 · 3D 小岛</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b1016; }
+  body { font-family: "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, sans-serif; }
+  #app { position: fixed; inset: 0; }
+  #app canvas { display: block; width: 100%; height: 100%; }
+
+  .card {
+    position: fixed; top: 26px; left: 30px; z-index: 10;
+    pointer-events: none; user-select: none;
+    opacity: 0; animation: fadeUp .9s .8s cubic-bezier(.2,.7,.3,1) forwards;
+  }
+  .card h1 {
+    font-size: 20px; font-weight: 500; letter-spacing: 3px; color: #fff;
+    text-shadow: 0 2px 18px rgba(0,0,0,.45), 0 0 30px rgba(255,180,205,.45);
+  }
+  .card .sub {
+    font-size: 11px; letter-spacing: 2.2px; color: rgba(255,255,255,.62); margin-top: 6px;
+    text-transform: uppercase;
+  }
+  .card .line { width: 44px; height: 1px; margin-top: 11px; background: linear-gradient(90deg, rgba(255,200,220,.9), transparent); }
+
+  .panel {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(12px);
+    z-index: 10; display: flex; gap: 7px; align-items: center;
+    padding: 8px 11px; border-radius: 999px;
+    background: rgba(255,255,255,.13);
+    border: 1px solid rgba(255,255,255,.22);
+    backdrop-filter: blur(16px) saturate(1.4);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    box-shadow: 0 10px 40px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.25);
+    opacity: 0; animation: fadeUp .9s 1.1s cubic-bezier(.2,.7,.3,1) forwards;
+  }
+  .group { display: flex; gap: 4px; align-items: center; }
+  .sep { width: 1px; height: 18px; background: rgba(255,255,255,.24); margin: 0 2px; }
+  .lab { font-size: 10.5px; color: rgba(255,255,255,.6); letter-spacing: 1px; padding: 0 2px 0 5px; }
+  button {
+    font-family: inherit; font-size: 12.5px; letter-spacing: .3px;
+    color: rgba(255,255,255,.82); background: transparent; border: 1px solid transparent;
+    padding: 6px 12px; border-radius: 999px; cursor: pointer;
+    transition: background .2s, color .2s, border-color .2s, transform .1s;
+    white-space: nowrap;
+  }
+  button:hover { background: rgba(255,255,255,.16); color: #fff; }
+  button:active { transform: scale(.96); }
+  button.on {
+    background: rgba(255,255,255,.26); color: #fff;
+    border-color: rgba(255,190,210,.6);
+    box-shadow: 0 0 16px rgba(255,170,200,.45), inset 0 0 10px rgba(255,200,220,.18);
+  }
+
+  .wx {
+    display: flex; align-items: center; gap: 6px; padding: 0 4px 0 2px;
+  }
+  .wx .lab { padding: 0; white-space: nowrap; }
+  .wx input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 74px; height: 3px; border-radius: 3px; outline: none;
+    background: rgba(255,255,255,.28); cursor: pointer;
+  }
+  .wx input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #fff; border: 1px solid rgba(255,180,205,.9);
+    box-shadow: 0 0 8px rgba(255,170,200,.8); cursor: pointer;
+  }
+  .wx .val { font-size: 10px; color: rgba(255,255,255,.66); min-width: 30px; text-align: right; }
+  .wx.dim { opacity: .35; pointer-events: none; }
+  #mobileTip {
+    position: fixed; inset: 0; z-index: 80; display: none;
+    background: #0b1016; color: #fff; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; padding: 30px;
+    text-align: center; font-size: 14px; line-height: 1.9;
+  }
+  #mobileTip .big { font-size: 17px; letter-spacing: 2px; }
+  #mobileTip .sm { font-size: 12px; color: rgba(255,255,255,.55); }
+  #mobileTip button {
+    margin-top: 6px; padding: 8px 18px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.3); background: transparent;
+    color: rgba(255,255,255,.8); font-size: 13px;
+  }  .hint {
+    position: fixed; bottom: 84px; right: 30px; z-index: 9;
+    font-size: 11px; letter-spacing: 1px; color: rgba(255,255,255,.45);
+    text-align: right; line-height: 1.9; pointer-events: none; user-select: none;
+    opacity: 0; animation: fadeIn 1.6s 1.9s ease forwards;
+  }
+  @keyframes fadeUp { to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+  .card { animation-name: fadeUpCard; }
+  @keyframes fadeUpCard { to { opacity: 1; } }
+  @keyframes fadeIn { to { opacity: 1; } }
+
+  #loader {
+    position: fixed; inset: 0; z-index: 50; background: #0b1016;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; transition: opacity .7s ease;
+  }
+  #loader.done { opacity: 0; pointer-events: none; }
+  .ring {
+    width: 32px; height: 32px; border-radius: 50%;
+    border: 1.5px solid rgba(255,180,205,.2);
+    border-top-color: rgba(255,190,215,.95);
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loaderTxt { font-size: 11px; letter-spacing: 3px; color: rgba(255,190,215,.5); }
+  .lbar {
+    width: 190px; height: 2px; border-radius: 2px; overflow: hidden;
+    background: rgba(255,255,255,.12); margin-top: 2px;
+  }
+  .lbar i {
+    display: block; height: 100%; width: 0;
+    background: linear-gradient(90deg, rgba(255,165,200,.85), rgba(255,238,246,.95));
+    box-shadow: 0 0 10px rgba(255,170,200,.6);
+    transition: width .22s cubic-bezier(.3,.8,.4,1);
+  }
+  #loaderPct { font-size: 10px; letter-spacing: 2px; color: rgba(255,190,215,.42); font-variant-numeric: tabular-nums; }
+
+  @media (max-width: 760px) {
+    .card { top: 16px; left: 16px; }
+    .card h1 { font-size: 16px; letter-spacing: 2px; }
+    .wx {
+    display: flex; align-items: center; gap: 6px; padding: 0 4px 0 2px;
+  }
+  .wx .lab { padding: 0; white-space: nowrap; }
+  .wx input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 74px; height: 3px; border-radius: 3px; outline: none;
+    background: rgba(255,255,255,.28); cursor: pointer;
+  }
+  .wx input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #fff; border: 1px solid rgba(255,180,205,.9);
+    box-shadow: 0 0 8px rgba(255,170,200,.8); cursor: pointer;
+  }
+  .wx .val { font-size: 10px; color: rgba(255,255,255,.66); min-width: 30px; text-align: right; }
+  .wx.dim { opacity: .35; pointer-events: none; }
+  #mobileTip {
+    position: fixed; inset: 0; z-index: 80; display: none;
+    background: #0b1016; color: #fff; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; padding: 30px;
+    text-align: center; font-size: 14px; line-height: 1.9;
+  }
+  #mobileTip .big { font-size: 17px; letter-spacing: 2px; }
+  #mobileTip .sm { font-size: 12px; color: rgba(255,255,255,.55); }
+  #mobileTip button {
+    margin-top: 6px; padding: 8px 18px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.3); background: transparent;
+    color: rgba(255,255,255,.8); font-size: 13px;
+  }  .hint { display: none; }
+    .panel { bottom: 14px; padding: 6px 8px; gap: 3px; max-width: calc(100vw - 20px); overflow-x: auto; }
+    button { font-size: 11px; padding: 5px 9px; }
+    .lab { display: none; }
+    .wx input[type=range] { width: 56px; }
+    #mobileTip {
+    position: fixed; inset: 0; z-index: 80; display: none;
+    background: #0b1016; color: #fff; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; padding: 30px;
+    text-align: center; font-size: 14px; line-height: 1.9;
+  }
+  #mobileTip .big { font-size: 17px; letter-spacing: 2px; }
+  #mobileTip .sm { font-size: 12px; color: rgba(255,255,255,.55); }
+  #mobileTip button {
+    margin-top: 6px; padding: 8px 18px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.3); background: transparent;
+    color: rgba(255,255,255,.8); font-size: 13px;
+  }  .hint { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div class="card">
+  <h1>樱花树下</h1>
+  <div class="sub">Sakura Isle · Real-time 3D</div>
+  <div class="line"></div>
+</div>
+
+<div class="panel">
+  <div class="group">
+    <button data-time="morning">🌅 清晨</button>
+    <button data-time="noon">☀ 正午</button>
+    <button data-time="afternoon">⛅ 午后</button>
+    <button data-time="dusk" class="on">🌇 黄昏</button>
+    <button data-time="night">🌙 夜晚</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button data-weather="sunny" class="on">☀ 晴</button>
+    <button data-weather="rain">🌧 雨</button>
+    <button data-weather="snow">❄ 雪</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group wx" id="wxGroup">
+    <span class="lab">强度</span>
+    <input id="wxPower" type="range" min="20" max="150" step="5" value="70">
+    <span class="val" id="wxPowerVal">70%</span>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button id="btnSound">🔊 声音</button>
+    <button id="btnRibbon">🎏 丝带</button>
+    <button id="btnRotate">⟳ 环绕</button>
+    <button id="btnReset">⌂ 复位</button>
+    <button id="btnShot">⤓ 截图</button>
+  </div>
+</div>
+
+<div class="hint">
+  拖动旋转 · 滚轮缩放<br>
+  <span style="opacity:.6">Drag to orbit · Scroll to zoom</span>
+</div>
+
+<div id="mobileTip">
+  <div class="big">建议用电脑浏览器浏览</div>
+  <div class="sm">这个场景是为桌面端设计的<br>手机上可能会卡顿或显示不全</div>
+  <button onclick="document.getElementById('mobileTip').style.display='none'">仍要继续</button>
+</div>
+<div id="loader">
+  <div class="ring"></div>
+  <div id="loaderTxt">BLOSSOMING</div>
+  <div class="lbar"><i id="lbarFill"></i></div>
+  <div id="loaderPct">0%</div>
+</div>
+
+<!-- 开发模式：自动检测更新并刷新（只在 http:// 下生效） -->
+<script>
+  (function () {
+    if (location.protocol === 'file:') return;
+    var current = null;
+    function poll() {
+      fetch('/__version', { cache: 'no-store' })
+        .then(function (r) { return r.text(); })
+        .then(function (v) {
+          if (current === null) { current = v; }
+          else if (v !== current) { current = v; location.reload(); }
+        })
+        .catch(function () { });
+    }
+    setInterval(poll, 1200);
+    poll();
+  })();
+</script>
+<script>
+  (function () {
+    var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    var phoneUA = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    if (coarse || phoneUA || window.innerWidth < 820) {
+      var t = document.getElementById('mobileTip');
+      if (t) t.style.display = 'flex';
+    }
+  })();
+</script>
+<!--SCRIPT_CORE-->
+<!--SCRIPT_ORBIT-->
+<!--SCRIPT_APP-->
+
+<script>
+  // 真实加载进度：由主程序在真实构建阶段回调
+  window.__setProgress = function (p, txt) {
+    var f = document.getElementById('lbarFill');
+    if (f) f.style.width = Math.max(0, Math.min(100, p)) + '%';
+    var t = document.getElementById('loaderPct');
+    if (t) t.textContent = Math.round(p) + '%';
+    var s = document.getElementById('loaderTxt');
+    if (s && txt) s.textContent = txt;
+  };
+  window.__hideLoader = function () {
+    var l = document.getElementById('loader');
+    if (l) l.classList.add('done');
+  };
+  // 兜底：若 20 秒后仍未就绪，显示提示（避免无限转圈无解释）
+  setTimeout(function () {
+    var s = document.getElementById('loaderTxt');
+    if (s && !document.getElementById('loader').classList.contains('done')) {
+      s.textContent = 'STILL BUILDING…';
+    }
+  }, 20000);
+</script>
+</body>
+</html>
