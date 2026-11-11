@@ -11,7 +11,9 @@
   /* ---------- 0a. 加载进度 & 分帧 ---------- */
   // 真实进度：每个构建阶段结束后调用；yieldFrame 让浏览器有机会重绘进度条
   const PROG = (p, txt) => { try { if (window.__setProgress) window.__setProgress(p, txt); } catch (e) { } };
-  const yieldFrame = () => new Promise((res) => requestAnimationFrame(() => setTimeout(res, 0)));
+  const yieldFrame = () => document.hidden
+    ? new Promise((res) => setTimeout(res, 0))
+    : new Promise((res) => requestAnimationFrame(() => setTimeout(res, 0)));
   PROG(2, '初始化');
 
   /* ---------- 0. 工具 ---------- */
@@ -240,72 +242,110 @@
         uniform float uSunSize, uTime, uCloud, uCloudWet;
         varying vec3 vWPos;
 
-        float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        // 无正弦多项式哈希 + 逐角独立 floor：防止 Windows D3D11/FXC 编译器对 dot(i+offset) 常量折叠产生 1-ULP 跨格跳变方斑
+        float h21(vec2 p){
+          vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+          p3 += dot(p3, p3.yzx + 33.33);
+          return fract((p3.x + p3.y) * p3.z);
+        }
         float n2(vec2 p){
-          vec2 i = floor(p), f = fract(p);
-          f = f * f * (3.0 - 2.0 * f);
-          return mix(mix(h21(i), h21(i + vec2(1,0)), f.x),
-                     mix(h21(i + vec2(0,1)), h21(i + vec2(1,1)), f.x), f.y);
+          vec2 i00 = floor(p);
+          vec2 i10 = floor(p + vec2(1.0, 0.0));
+          vec2 i01 = floor(p + vec2(0.0, 1.0));
+          vec2 i11 = floor(p + vec2(1.0, 1.0));
+          vec2 f = p - i00;
+          f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+          return mix(mix(h21(i00), h21(i10), f.x),
+                     mix(h21(i01), h21(i11), f.x), f.y);
         }
         float fbm2(vec2 p){
           float s = 0.0, a = 0.5;
-          for (int i = 0; i < 5; i++) { s += n2(p) * a; p *= 2.03; a *= 0.5; }
+          const mat2 m2 = mat2(0.80, -0.60, 0.60, 0.80);
+          for (int i = 0; i < 5; i++) { s += n2(p) * a; p = m2 * p * 2.02 + vec2(13.7, 29.3); a *= 0.5; }
           return s;
         }
 
         void main(){
           vec3 dir = normalize(vWPos - cameraPosition);   // 真实视线方向，太阳不再因球心视差而偏位
           float h = clamp(dir.y, -1.0, 1.0);
-          vec3 col = mix(uBot, uMid, smoothstep(-0.05, 0.30, h));
-          col = mix(col, uTop, smoothstep(0.22, 0.85, h));
+          // 调整天顶与中景过渡区间：在常规视角(h≈0~0.42)下也能展现深邃暮光蓝紫到暖金霞光的层次
+          vec3 col = mix(uBot, uMid, smoothstep(-0.02, 0.16, h));
+          col = mix(col, uTop, smoothstep(0.13, 0.45, h));
 
-          // ---- 云层：把视线投影到一块虚拟云板上 ----
-          float cl = 0.0;
-          float thick = 0.0;
-          if (dir.y > 0.015) {
-            vec2 cp = dir.xz / max(dir.y, 0.045);
-            cp = cp * 0.42 + vec2(uTime * 0.0075, uTime * 0.0042);
-            float n = fbm2(cp * 0.85);
-            n += 0.45 * fbm2(cp * 2.3 + 13.7);
-            n /= 1.45;
-            thick = pow(clamp(n, 0.0, 1.0), 1.25);
-            // 覆盖度：uCloud 越大，云的阈值越低
-            float thr = 1.06 - uCloud * 0.92;
-            cl = smoothstep(thr, thr + 0.20, n);
-            // 地平线附近淡出，避免出现硬边
-            cl *= smoothstep(0.015, 0.16, dir.y);
-          }
+          vec2 dh = normalize(dir.xz + vec2(1e-5));
+          vec2 sh = normalize(uSunDir.xz + vec2(1e-5));
+          float toward = pow(clamp(dot(dh, sh) * 0.5 + 0.5, 0.0, 1.0), 1.8);
+          float sunDot = clamp(dot(dir, normalize(uSunDir)), 0.0, 1.0);
 
-          // ---- 夕照金橙：地平线朝向太阳一侧的暖光 ----
+          // ---- 夕照晚霞：收束在地平线与低空，避免把整个天顶刷成纯黄 ----
           {
-            vec2 dh = normalize(dir.xz + vec2(1e-5));
-            vec2 sh = normalize(uSunDir.xz + vec2(1e-5));
-            float toward = pow(clamp(dot(dh, sh) * 0.5 + 0.5, 0.0, 1.0), 2.2);
-            float band = smoothstep(0.55, 0.02, abs(dir.y - 0.04));
-            col = mix(col, uGlow, band * (0.28 + 0.72 * toward) * uSunset * 0.85);
-            // 贴近太阳的强辉光
-            float nearSun = pow(clamp(dot(dir, normalize(uSunDir)), 0.0, 1.0), 6.0);
-            col += uGlow * nearSun * uSunset * 0.55;
+            float band = smoothstep(0.28, 0.0, abs(dir.y - 0.025));
+            vec3 horizonGlow = mix(uGlow, vec3(1.0, 0.42, 0.32), (1.0 - toward) * 0.45);
+            col = mix(col, horizonGlow, band * (0.25 + 0.75 * toward) * uSunset * 0.76);
+            // 贴近太阳方向的柔金霞光
+            float nearSun = pow(sunDot, 4.5);
+            col += uGlow * nearSun * uSunset * 0.48;
           }
 
-          // 云的颜色：受自身厚度、太阳方向、阴雨程度影响
-          vec3 cc = uCloudTint;
-          cc *= 0.50 + 0.95 * thick;                 // 加对比，阴天也能看出云块
-          float s = pow(clamp(dot(dir, normalize(uSunDir)), 0.0, 1.0), 4.0);
-          cc += uSunColor * s * 0.40;                       // 朝阳一侧的镶亮边
-          cc = mix(cc, uGlow * (0.55 + 0.65 * thick), uSunset * 0.72 * s);   // 夕阳把云染成金红
-          cc = mix(cc, vec3(0.38, 0.41, 0.47), uCloudWet * 0.70);   // 阴雨天压成铅灰
-          col = mix(col, cc, cl * 0.95);
+          // ---- 双层火烧云：高层流云 + 低层积云（修正 fbm 值域 0.30~0.68 导致旧版无云的问题） ----
+          if (dir.y > 0.008) {
+            float hy = max(dir.y + 0.035, 0.055);
+            vec2 cp = dir.xz / hy;
+            vec2 windOff = vec2(uTime * 0.0065, uTime * 0.0032);
+            // 域扭曲：拉出横向舒展的流云纹理
+            vec2 warp = vec2(
+              fbm2(cp * 0.32 + windOff * 0.6),
+              fbm2(cp * 0.32 + vec2(5.2, 1.3) - windOff * 0.5)
+            ) - 0.5;
+            vec2 uv1 = cp * vec2(0.28, 0.46) + warp * 0.55 + windOff;
+            float raw1 = fbm2(uv1) * 0.68 + fbm2(uv1 * 2.15 + 7.3) * 0.32;
+            // 将 fbm 窄分布 [0.31, 0.67] 映射回 [0, 1]
+            float n1 = clamp((raw1 - 0.31) / 0.35, 0.0, 1.0);
+
+            // 沿太阳方向偏移采样，计算云朵底边与迎光金边
+            float rawLit = fbm2(uv1 + sh * 0.14);
+            float nLit = clamp((rawLit - 0.31) / 0.35, 0.0, 1.0);
+            float rimLight = clamp((n1 - nLit) * 2.6 + 0.35, 0.0, 1.0);
+
+            // 覆盖度控制：晴天/黄昏也能呈现层次分明的火烧云
+            float cov = clamp(uCloud * 1.45 + 0.18, 0.25, 0.92);
+            float cl1 = smoothstep(1.0 - cov, 1.0 - cov + 0.32, n1);
+            float thick = smoothstep(1.0 - cov + 0.05, 0.95, n1);
+
+            // 高空轻纱卷云（增加天顶细节）
+            vec2 uv2 = cp * vec2(0.55, 0.85) - windOff * 0.7 + warp * 0.25;
+            float n2c = clamp((fbm2(uv2 + 19.1) - 0.34) / 0.32, 0.0, 1.0);
+            float cl2 = smoothstep(0.52, 0.84, n2c) * 0.42 * smoothstep(0.06, 0.28, dir.y);
+
+            float cl = clamp(cl1 + cl2 * (1.0 - cl1 * 0.6), 0.0, 1.0);
+            // 地平线淡出，避免低空硬切
+            cl *= smoothstep(0.008, 0.11, dir.y);
+
+            // 云体着色：背光面/厚云处偏暮色紫灰，底边与朝阳面染金橙绯红
+            vec3 shadowCol = mix(uTop * 0.85 + vec3(0.10, 0.08, 0.14), vec3(0.44, 0.32, 0.48), uSunset * 0.75);
+            vec3 litCol = mix(uCloudTint, uGlow * 1.18, uSunset * (0.55 + 0.45 * toward));
+            vec3 rimCol = mix(uSunColor, vec3(1.0, 0.76, 0.45), uSunset * 0.7) * (1.15 + 0.65 * pow(sunDot, 3.0));
+
+            vec3 cc = mix(litCol, shadowCol, smoothstep(0.15, 0.82, thick) * (0.65 - 0.30 * rimLight));
+            // 云底与迎光边缘镶金边
+            float edgeGlow = (1.0 - smoothstep(0.0, 0.55, thick)) * 0.65 + rimLight * 0.55;
+            cc = mix(cc, rimCol, clamp(edgeGlow * (0.35 + 0.65 * (uSunset * 0.7 + pow(sunDot, 2.0) * 0.5)), 0.0, 0.88));
+            // 阴雨天压成铅灰
+            cc = mix(cc, vec3(0.38, 0.41, 0.47), uCloudWet * 0.72);
+
+            col = mix(col, cc, cl * 0.88);
+          }
+
           col *= (1.0 - uCloudWet * 0.20);                  // 阴天整体压暗（别压太死）
 
-          // 太阳圆盘 + 光晕
-          float d = dot(dir, normalize(uSunDir));
-          float disk = smoothstep(uSunSize, uSunSize + 0.0006, d);
-          float halo = pow(clamp(d, 0.0, 1.0), 220.0) * 0.5
-                     + pow(clamp(d, 0.0, 1.0), 24.0) * 0.13;
+          // 太阳圆盘 + 柔美双层光晕
+          float d = clamp(dot(dir, normalize(uSunDir)), 0.0, 1.0);
+          float disk = smoothstep(uSunSize, uSunSize + 0.0008, d);
+          float halo = pow(d, 180.0) * 0.55
+                     + pow(d, 18.0) * 0.16;
           // 阴雨天太阳被云遮住
           float sunVis = 1.0 - uCloudWet * 0.85;
-          col += uSunColor * (disk * 6.0 + halo) * sunVis;
+          col += uSunColor * (disk * 5.2 + halo) * sunVis;
           gl_FragColor = vec4(col, 1.0);
         }`,
     })
@@ -401,16 +441,16 @@
                 + 0.015 * fbm(x * 2.6, 1.1, z * 2.6, 2);
         positions.push(x, y, z);
 
-        // 草地颜色：深浅斑驳
+        // 草地底色：明快温润的春草绿，避免暗底把上层草叶衬成脏黑橄榄色
         const n1 = fbm(x * 1.6 + 4, 0.8, z * 1.6 - 2, 3);
         const n2 = fbm(x * 5.5 - 3, 1.6, z * 5.5 + 6, 2);
-        cTmp.setRGB(0.18, 0.34, 0.12);
-        cTmp.lerp(new T.Color(0.32, 0.52, 0.16), smoothstep(-0.3, 0.5, n1));
-        cTmp.lerp(new T.Color(0.12, 0.24, 0.09), smoothstep(0.1, 0.6, n2) * 0.45);
+        cTmp.setRGB(0.24, 0.43, 0.16);
+        cTmp.lerp(new T.Color(0.38, 0.58, 0.21), smoothstep(-0.3, 0.5, n1));
+        cTmp.lerp(new T.Color(0.17, 0.32, 0.12), smoothstep(0.1, 0.6, n2) * 0.38);
         // 靠近边缘略深
-        cTmp.multiplyScalar(lerp(1.0, 0.78, smoothstep(0.82, 1.0, t)));
-        // 岛缘露土：草地到侧壁之间加一圈土色过渡
-        cTmp.lerp(new T.Color(0.35, 0.27, 0.17), smoothstep(0.93, 1.0, t) * 0.38);
+        cTmp.multiplyScalar(lerp(1.0, 0.82, smoothstep(0.82, 1.0, t)));
+        // 岛缘露土：草地到侧壁之间加一圈自然苔土过渡
+        cTmp.lerp(new T.Color(0.36, 0.29, 0.19), smoothstep(0.92, 1.0, t) * 0.42);
         colors.push(cTmp.r, cTmp.g, cTmp.b);
         uvs.push(x * 0.25, z * 0.25);
       }
@@ -436,43 +476,45 @@
     top.receiveShadow = true;
     islandGroup.add(top);
 
-    // 侧面土层
+    // 侧面土层：加深水下收拢裙边，防止波谷落下时岛底两侧露角外翻
     const sidePos = [], sideCol = [], sideUv = [], sideIdx = [];
-    const SR = 10;
+    const SR = 12;
     const segs = 96;
     for (let ri = 0; ri <= SR; ri++) {
       const t = ri / SR;
       for (let si = 0; si < segs; si++) {
         const th = (si / segs) * TAU;
-        // 轮廓：7/13 瓣低频起伏 + 细碎噪声，侧壁不再是光滑圆柱
+        // 轮廓：7/13 瓣低频起伏 + 细碎岩石凹凸
         const edge = 1 + 0.038 * Math.sin(th * 7.0 + 1.3)
                        + 0.023 * Math.sin(th * 13.0 + 0.7)
-                       + 0.017 * fbm(Math.cos(th) * 2.6 + 5, 1.7, Math.sin(th) * 2.6 - 3, 2);
-        // 中段微微鼓出 + 底部收圆
-        const bulge = 1 + 0.050 * Math.sin(t * Math.PI) * (0.6 + 0.4 * Math.sin(th * 9.0));
-        const shrink = (1 - 0.16 * Math.pow(t, 1.9)) * bulge;
+                       + 0.022 * fbm(Math.cos(th) * 2.8 + 5, 1.7 + t * 1.4, Math.sin(th) * 2.8 - 3, 2);
+        // 上沿微鼓、向水下自然内收，彻底消除两侧突出的"托盘耳朵"
+        const bulge = 1 + 0.032 * Math.sin(Math.min(1, t * 1.35) * Math.PI) * (0.6 + 0.4 * Math.sin(th * 9.0));
+        const shrink = (1 - 0.30 * Math.pow(t, 1.45)) * bulge;
         const r = WORLD.islandR * edge * shrink;
         const x = Math.cos(th) * r, z = Math.sin(th) * r;
-        let y = lerp(0.0, WORLD.seatY, Math.pow(t, 0.9));
-        // 纵向侵蚀沟（越往下越深）
-        y -= 0.030 * Math.abs(Math.sin(th * 11.0 + 0.4)) * Math.pow(t, 0.7);
+        let y = lerp(0.0, WORLD.seatY - 0.52, Math.pow(t, 0.95));
+        // 纵向岩层侵蚀沟
+        y -= 0.028 * Math.abs(Math.sin(th * 11.0 + 0.4)) * Math.pow(t, 0.7);
         sidePos.push(x, y, z);
 
-        const n = fbm(x * 1.4 + 10, y * 2.2, z * 1.4, 3);
-        if (t < 0.13) {
-          cTmp.setRGB(0.24, 0.36, 0.15).lerp(new T.Color(0.33, 0.25, 0.14), t / 0.13);
-        } else if (t < 0.55) {
-          const u = (t - 0.13) / 0.42;
-          cTmp.setRGB(0.28, 0.21, 0.12).lerp(new T.Color(0.36, 0.25, 0.14), u);
-          cTmp.lerp(new T.Color(0.22, 0.15, 0.09), smoothstep(0.4, 1.0, u));
+        const n = fbm(x * 1.8 + 10, y * 3.0, z * 1.8, 3);
+        if (t < 0.16) {
+          // 顶部垂挂草皮苔藓过渡带
+          cTmp.setRGB(0.24, 0.39, 0.16).lerp(new T.Color(0.35, 0.27, 0.17), t / 0.16);
+        } else if (t < 0.58) {
+          const u = (t - 0.16) / 0.42;
+          cTmp.setRGB(0.35, 0.27, 0.17).lerp(new T.Color(0.40, 0.30, 0.20), Math.sin(u * Math.PI));
+          cTmp.lerp(new T.Color(0.25, 0.19, 0.13), smoothstep(0.45, 1.0, u));
         } else {
-          const u = (t - 0.55) / 0.45;
-          cTmp.setRGB(0.22, 0.15, 0.09).lerp(new T.Color(0.30, 0.27, 0.24), u);
+          const u = (t - 0.58) / 0.42;
+          cTmp.setRGB(0.25, 0.19, 0.13).lerp(new T.Color(0.20, 0.16, 0.13), u);
         }
-        // 纵向深浅条纹：泥土分层感
-        const stripe = 0.5 + 0.5 * Math.sin(th * 26.0 + fbm(x * 2.0, 3.0, z * 2.0, 2) * 4.0);
-        cTmp.multiplyScalar(0.80 + stripe * 0.32);
-        cTmp.offsetHSL(0, 0, n * 0.045);
+        // 横向沉积岩层纹 + 纵向凹凸阴影，破除光滑塑料感
+        const strata = 0.5 + 0.5 * Math.sin(y * 28.0 + fbm(x * 2.4, y * 2.0, z * 2.4, 2) * 3.5);
+        const gully = 0.5 + 0.5 * Math.sin(th * 24.0 + n * 4.5);
+        cTmp.multiplyScalar(0.76 + strata * 0.22 + gully * 0.16);
+        cTmp.offsetHSL(0, 0, n * 0.05);
         sideCol.push(cTmp.r, cTmp.g, cTmp.b);
         sideUv.push(si / segs * 4, t * 1.2);
       }
@@ -522,34 +564,126 @@
     scene.add(m);
   })();
 
-  /* ---------- 6b. 岸边落花带：岛缘外一圈密集花瓣，越外越稀 ---------- */
+  /* ---------- 6b. 波浪函数与海面共享 Uniform（供岸边落花与花瓣海共用） ---------- */
+  const SEA_WAVE_GLSL = `
+    float seaWaveH(vec2 p, float t){
+      float d = length(p);
+      // 小岛附近压平，避免浪拍穿岛底
+      float near = smoothstep(3.2, 9.0, d);
+      float h = 0.0;
+      h += sin(dot(p, vec2(0.850, 0.527)) * 0.2010 + t * 0.52) * 0.430;
+      h += sin(dot(p, vec2(0.530,-0.848)) * 0.4030 + t * 0.82) * 0.305;
+      h += sin(dot(p, vec2(-0.300, 0.954)) * 0.8180 + t * 1.22) * 0.180;
+      h += sin(dot(p, vec2(0.950, 0.312)) * 1.9600 + t * 1.95) * 0.100;
+      h += sin(dot(p, vec2(-0.750, 0.660)) * 3.6000 + t * 2.60) * 0.045;
+      h += sin(dot(p, vec2(0.200,-0.980)) * 0.6100 + t * 1.05) * 0.110;
+
+      // ★ 局部大涌浪：4 处随机游走的浪峰，此起彼伏，不是固定在某一点
+      for (int i = 0; i < 4; i++) {
+        float fi = float(i);
+        float ang = fi * 2.399 + t * 0.085 + fi * 0.63;
+        float rad = 10.5 + fi * 8.0 + sin(t * 0.21 + fi) * 2.5;
+        vec2 c = vec2(cos(ang), sin(ang)) * rad;
+        float s = 0.50 + 0.50 * sin(t * 0.75 + fi * 2.1);
+        float d2 = dot(p - c, p - c);
+        h += exp(-d2 * 0.020) * s * 1.15;
+      }
+
+      return h * mix(0.18, 1.0, near) * mix(1.0, 0.55, smoothstep(60.0, 150.0, d));
+    }`;
+
+  const seaUniforms = {
+    uTime: { value: 0 },
+    uSunDir: skyUniforms.uSunDir,
+    uCrest: { value: new T.Color(0xffeff6) },
+    uMid: { value: new T.Color(0xeaa6c1) },
+    uDeep: { value: new T.Color(0xbe5f8b) },
+    uSky: { value: new T.Color(0x9dc2e4) },
+    uSun: { value: new T.Color(0xfff0d8) },
+    uFogColor: { value: scene.fog.color },
+    uGlow: skyUniforms.uGlow,
+    uSunset: skyUniforms.uSunset,
+    uIslandR: { value: WORLD.islandR },
+    uBright: { value: 1.0 },
+    uWindDir: windUniforms.uWindDir,
+    uWindStr: windUniforms.uWindStr,
+  };
+  const waterUniforms = seaUniforms;   // 兼容旧引用（part4 更新 uTime）
+
+  /* ---------- 6b-2. 岸边落花带：随波浪起伏、贴合岛缘轮廓 ---------- */
   const shorePetals = (function buildShorePetals() {
     const N = 1200;
     const geo = makeSeaPetalGeo();
-    const mat = new T.MeshStandardMaterial({
-      color: 0xffe2ee,
-      roughness: 0.92,
-      metalness: 0.0,
+    const sr = rng(77123);
+    const seed = new Float32Array(N);
+    for (let i = 0; i < N; i++) seed[i] = sr();
+    geo.setAttribute('aSeed', new T.InstancedBufferAttribute(seed, 1));
+
+    const mat = new T.ShaderMaterial({
       side: T.DoubleSide,
-      emissive: 0xff9fc2,
-      emissiveIntensity: 0.24,
+      uniforms: {
+        uTime: seaUniforms.uTime,
+        uSunDir: seaUniforms.uSunDir,
+        uCrest: seaUniforms.uCrest,
+        uMid: seaUniforms.uMid,
+        uSun: seaUniforms.uSun,
+        uBright: seaUniforms.uBright,
+      },
+      vertexShader: SEA_WAVE_GLSL + `
+        uniform float uTime;
+        attribute float aSeed;
+        varying float vSeed;
+        varying vec3 vNw;
+        void main(){
+          vSeed = aSeed;
+          #ifdef USE_INSTANCING
+            mat4 im = instanceMatrix;
+          #else
+            mat4 im = mat4(1.0);
+          #endif
+          vec3 p = position;
+          vec4 base = im * vec4(0.0, 0.0, 0.0, 1.0);
+          float h = seaWaveH(base.xz, uTime);
+          p.y += sin(uTime * 1.6 + aSeed * 6.2831) * 0.008;
+          vec4 wp = modelMatrix * im * vec4(p, 1.0);
+          wp.y += h + 0.025;
+          vNw = normalize(mat3(im) * normal);
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }`,
+      fragmentShader: `
+        uniform vec3 uCrest, uMid, uSunDir, uSun;
+        uniform float uBright;
+        varying float vSeed;
+        varying vec3 vNw;
+        void main(){
+          vec3 N = normalize(vNw);
+          vec3 L = normalize(uSunDir);
+          float ndl = abs(dot(N, L));
+          vec3 col = mix(uMid, uCrest, 0.45 + 0.55 * vSeed);
+          col *= (0.80 + ndl * 0.32);
+          col += uSun * pow(ndl, 5.0) * 0.14;
+          gl_FragColor = vec4(col * uBright, 1.0);
+        }`,
     });
+
     const inst = new T.InstancedMesh(geo, mat, N);
     inst.frustumCulled = false;
     const dummy = new T.Object3D();
     for (let i = 0; i < N; i++) {
-      // 越靠岛缘越密
-      const rr = WORLD.islandR * 1.01 + Math.pow(R(), 1.85) * 1.05;
+      // 保持与原版完全一致的 6 次 R() 调用，同时贴合小岛 7/13 瓣边缘轮廓
+      const rRand = Math.pow(R(), 1.85);
       const a = R() * TAU;
+      const edge = 1 + 0.038 * Math.sin(a * 7.0 + 1.3) + 0.023 * Math.sin(a * 13.0 + 0.7);
+      const rr = WORLD.islandR * edge * 0.98 + rRand * 1.15;
       dummy.position.set(Math.cos(a) * rr, 0, Math.sin(a) * rr);
-      dummy.rotation.set(-Math.PI / 2 + (R() - 0.5) * 0.5, R() * TAU, (R() - 0.5) * 0.4);
+      dummy.rotation.set((R() - 0.5) * 0.35, R() * TAU, (R() - 0.5) * 0.35);
       const s = 0.75 + R() * 0.95;
       dummy.scale.setScalar(s);
       dummy.updateMatrix();
       inst.setMatrixAt(i, dummy.matrix);
     }
     inst.instanceMatrix.needsUpdate = true;
-    inst.position.y = WORLD.waterY + 0.022;
+    inst.position.y = WORLD.waterY;
     scene.add(inst);
     return inst;
   })();
@@ -557,24 +691,26 @@
   PROG(22, '堆起小岛');
   await yieldFrame();
 
-  /* ---------- 6c. 远景山峦与森林剪影（拉开纵深） ---------- */
-  // 环形"幕布"式山脊：内圈可见，越远越淡
-  function buildRidge(radius, baseY, hMin, hMax, segs, cLowHex, cHighHex, seedOff, jitter) {
-    const pos = [], col = [], idx = [];
-    const cLow = new T.Color(cLowHex), cHigh = new T.Color(cHighHex);
+  /* ---------- 6c. 远景山峦与森林剪影（分形山脊 + 高度雾与空气透视） ---------- */
+  function buildRidge(radius, baseY, hMin, hMax, segs, seedOff, sharpness) {
+    const pos = [], uvs = [], idx = [];
     for (let i = 0; i <= segs; i++) {
       const a = (i / segs) * TAU;
       const nx = Math.cos(a), nz = Math.sin(a);
-      // 多频噪声堆山脊
-      let h = fbm(nx * 2.3 + seedOff, 3.3, nz * 2.3, 3) * 0.5 + 0.5;
-      h += (fbm(nx * 7.1 - seedOff, 8.1, nz * 7.1, 2) * 0.5 + 0.5) * 0.45;
-      h += (fbm(nx * 17.0 + seedOff * 2, 1.7, nz * 17.0, 2) * 0.5 + 0.5) * 0.18;
-      h = clamp(h / 1.63, 0, 1);
-      const yTop = baseY + hMin + (hMax - hMin) * Math.pow(h, 1.45) + (R() - 0.5) * jitter;
+      // 分形山脊噪声（Ridged Multifractal）：山峰棱线自然挺拔、山谷平缓，去除原本锯齿状顶点随机抖动
+      const r1 = 1.0 - Math.abs(noise3(nx * 1.7 + seedOff, 2.3, nz * 1.7 - seedOff));
+      const r2 = 1.0 - Math.abs(noise3(nx * 3.9 - seedOff * 1.3, 5.1, nz * 3.9 + seedOff));
+      const r3 = 1.0 - Math.abs(noise3(nx * 8.5 + seedOff * 2.1, 8.7, nz * 8.5 - seedOff * 0.7));
+      const r4 = fbm(nx * 16.0 + seedOff, 1.9, nz * 16.0, 2) * 0.5 + 0.5;
+      const ridge = r1 * r1 * 0.54 + r2 * r2 * 0.28 + r3 * 0.12 + r4 * 0.06;
+      // 大尺度起伏包络：让远山有主峰也有低矮山口，不再是一圈等高围墙
+      const env = smoothstep(0.16, 0.86, fbm(nx * 1.05 + seedOff * 0.5, 1.4, nz * 1.05 - seedOff * 0.4, 2) * 0.5 + 0.5);
+      const h = Math.pow(clamp(ridge * (0.32 + 0.72 * env), 0, 1), sharpness || 1.35);
+      const yTop = baseY + hMin + (hMax - hMin) * h;
       pos.push(nx * radius, yTop, nz * radius);
-      col.push(cHigh.r, cHigh.g, cHigh.b);
-      pos.push(nx * radius, baseY - 8, nz * radius);
-      col.push(cLow.r, cLow.g, cLow.b);
+      uvs.push(h, 1.0);
+      pos.push(nx * radius, baseY - 6.0, nz * radius);
+      uvs.push(h, 0.0);
     }
     for (let i = 0; i < segs; i++) {
       const a0 = i * 2, b0 = i * 2 + 1, a1 = (i + 1) * 2, b1 = (i + 1) * 2 + 1;
@@ -582,30 +718,101 @@
     }
     const g = new T.BufferGeometry();
     g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
-    g.setAttribute('color', new T.Float32BufferAttribute(col, 3));
+    g.setAttribute('uv', new T.Float32BufferAttribute(uvs, 2));
     g.setIndex(idx);
     g.computeVertexNormals();
     return g;
   }
 
+  function makeRidgeMat(layerDepth, baseHex, crestHex) {
+    return new T.ShaderMaterial({
+      side: T.DoubleSide,
+      transparent: true,
+      depthWrite: true,
+      uniforms: {
+        uLayer: { value: layerDepth },
+        uBaseCol: { value: new T.Color(baseHex) },
+        uCrestCol: { value: new T.Color(crestHex) },
+        uFogColor: { value: scene.fog.color },
+        uSkyTop: skyUniforms.uTop,
+        uSkyMid: skyUniforms.uMid,
+        uSkyBot: skyUniforms.uBot,
+        uGlow: skyUniforms.uGlow,
+        uSunDir: skyUniforms.uSunDir,
+        uSunset: skyUniforms.uSunset,
+        uCloudWet: skyUniforms.uCloudWet,
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vW;
+        void main(){
+          vUv = uv;
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vW = wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }`,
+      fragmentShader: `
+        uniform float uLayer, uSunset, uCloudWet;
+        uniform vec3 uBaseCol, uCrestCol, uFogColor, uSkyTop, uSkyMid, uSkyBot, uGlow, uSunDir;
+        varying vec2 vUv;
+        varying vec3 vW;
+        void main(){
+          vec2 dh = normalize(vW.xz + vec2(1e-5));
+          vec2 sh = normalize(uSunDir.xz + vec2(1e-5));
+          float toward = pow(clamp(dot(dh, sh) * 0.5 + 0.5, 0.0, 1.0), 1.8);
+
+          // 山体本色：随日照/暮色自适应（黄昏偏暮紫黛蓝，白天偏青黛，夜晚偏深靛）
+          vec3 body = mix(uBaseCol, uCrestCol, smoothstep(0.15, 0.92, vUv.y));
+          vec3 duskTint = mix(vec3(0.26, 0.21, 0.34), vec3(0.48, 0.33, 0.44), toward);
+          body = mix(body, duskTint, uSunset * 0.68);
+          float skyLum = dot(uSkyMid, vec3(0.299, 0.587, 0.114));
+          body *= clamp(skyLum * 1.35 + 0.12, 0.14, 1.15);
+
+          // 远山空气透视：越远的山层越融进地平线霞雾，同时保留清晰的远近剪影层次
+          vec3 hazeCol = mix(uFogColor, uSkyBot, 0.42);
+          hazeCol = mix(hazeCol, uGlow * 0.92 + vec3(0.08, 0.04, 0.06), toward * uSunset * 0.40);
+          hazeCol *= (1.0 - uCloudWet * 0.22);
+
+          float aerial = mix(0.12, 0.64, uLayer);
+          vec3 col = mix(body, hazeCol, aerial);
+
+          // 山脚高度雾：仅在山脚低处弥漫薄霭，消除海山硬切线又不遮没山体轮廓
+          float mistH = mix(0.85, 2.60, uLayer);
+          float footMist = 1.0 - smoothstep(-0.35, mistH, vW.y);
+          col = mix(col, hazeCol, footMist * (0.62 + 0.28 * uLayer));
+
+          // 脊线天光镶边：拉开前后山峦交叠处的层次
+          float ridgeRim = smoothstep(0.78, 1.0, vUv.y);
+          col += hazeCol * ridgeRim * (0.07 + 0.15 * toward) * (1.0 - uLayer * 0.45);
+
+          float alpha = smoothstep(-1.1, -0.05, vW.y);
+          gl_FragColor = vec4(col, alpha);
+        }`,
+    });
+  }
+
   const farGroup = new T.Group();
   farGroup.name = 'farScenery';
   {
-    // 最远山：淡蓝灰，几乎融进雾里
+    // 4 层远近交错群山：最远淡紫峰峦 → 中远山 → 中近山 → 近处林线丘陵
     farGroup.add(new T.Mesh(
-      buildRidge(120, -1.2, 8, 26, 260, 0x7c8ba6, 0xb9c6d6, 11.7, 1.4),
-      new T.MeshBasicMaterial({ vertexColors: true, side: T.DoubleSide, fog: true, depthWrite: true })
+      buildRidge(126, -1.0, 5.2, 18.5, 260, 11.7, 1.48),
+      makeRidgeMat(0.86, 0x62708e, 0x92a2bc)
     ));
-    // 中景山：略深
     farGroup.add(new T.Mesh(
-      buildRidge(90, -1.0, 5, 16, 220, 0x66748e, 0x93a2b8, 3.4, 1.1),
-      new T.MeshBasicMaterial({ vertexColors: true, side: T.DoubleSide, fog: true, depthWrite: true })
+      buildRidge(102, -0.9, 3.8, 13.6, 240, 23.1, 1.40),
+      makeRidgeMat(0.60, 0x4e5c78, 0x7888a4)
     ));
-    // 森林带：低矮锯齿，像远处林线
     farGroup.add(new T.Mesh(
-      buildRidge(68, 0.05, 1.1, 4.4, 340, 0x47543f, 0x6a7a62, 7.1, 0.45),
-      new T.MeshBasicMaterial({ vertexColors: true, side: T.DoubleSide, fog: true, depthWrite: true })
+      buildRidge(84, -0.8, 2.4, 9.2, 220, 3.4, 1.32),
+      makeRidgeMat(0.36, 0x3e4b64, 0x61708a)
     ));
+    farGroup.add(new T.Mesh(
+      buildRidge(68, -0.4, 0.8, 4.2, 320, 7.1, 1.22),
+      makeRidgeMat(0.14, 0x35403a, 0x505e52)
+    ));
+    // 保持全局随机数序列 R() 与旧版完全一致（旧版三层山共调用 261+221+341 = 823 次 R()）
+    for (let _k = 0; _k < 823; _k++) R();
   }
   scene.add(farGroup);
 
@@ -744,50 +951,7 @@
   mirrorGroup.visible = false;
   scene.add(mirrorGroup);
 
-  /* ---------- 7. 花瓣之海（翻涌的浪由樱花花瓣组成） ---------- */
-  // 波浪函数：GLSL 与 JS 共用同一组参数，保证视觉一致
-  const SEA_WAVE_GLSL = `
-    float seaWaveH(vec2 p, float t){
-      float d = length(p);
-      // 小岛附近压平，避免浪拍穿岛底
-      float near = smoothstep(3.2, 9.0, d);
-      float h = 0.0;
-      h += sin(dot(p, vec2(0.850, 0.527)) * 0.2010 + t * 0.52) * 0.430;
-      h += sin(dot(p, vec2(0.530,-0.848)) * 0.4030 + t * 0.82) * 0.305;
-      h += sin(dot(p, vec2(-0.300, 0.954)) * 0.8180 + t * 1.22) * 0.180;
-      h += sin(dot(p, vec2(0.950, 0.312)) * 1.9600 + t * 1.95) * 0.100;
-      h += sin(dot(p, vec2(-0.750, 0.660)) * 3.6000 + t * 2.60) * 0.045;
-      h += sin(dot(p, vec2(0.200,-0.980)) * 0.6100 + t * 1.05) * 0.110;
-
-      // ★ 局部大涌浪：4 处随机游走的浪峰，此起彼伏，不是固定在某一点
-      for (int i = 0; i < 4; i++) {
-        float fi = float(i);
-        float ang = fi * 2.399 + t * 0.085 + fi * 0.63;
-        float rad = 10.5 + fi * 8.0 + sin(t * 0.21 + fi) * 2.5;
-        vec2 c = vec2(cos(ang), sin(ang)) * rad;
-        float s = 0.50 + 0.50 * sin(t * 0.75 + fi * 2.1);
-        float d2 = dot(p - c, p - c);
-        h += exp(-d2 * 0.020) * s * 1.15;
-      }
-
-      return h * mix(0.18, 1.0, near) * mix(1.0, 0.55, smoothstep(60.0, 150.0, d));
-    }`;
-
-  const seaUniforms = {
-    uTime: { value: 0 },
-    uSunDir: skyUniforms.uSunDir,
-    uCrest: { value: new T.Color(0xffeff6) },
-    uMid: { value: new T.Color(0xeaa6c1) },
-    uDeep: { value: new T.Color(0xbe5f8b) },
-    uSky: { value: new T.Color(0x9dc2e4) },
-    uSun: { value: new T.Color(0xfff0d8) },
-    uIslandR: { value: WORLD.islandR },
-    uBright: { value: 1.0 },
-    uWindDir: windUniforms.uWindDir,
-    uWindStr: windUniforms.uWindStr,
-  };
-  const waterUniforms = seaUniforms;   // 兼容旧引用（part4 更新 uTime）
-
+  /* ---------- 7. 花瓣之海（翻涌的浪由樱花花瓣组成，SEA_WAVE_GLSL 与 seaUniforms 已在前置定义） ---------- */
   // 极坐标圆盘：径向指数分布，岛的近处密、远处疏
   function buildSeaGeometry(rMin, rMax, rings, segs) {
     const pos = [], uvs = [], idx = [];
@@ -831,6 +995,9 @@
         uDeep: seaUniforms.uDeep,
         uSky: seaUniforms.uSky,
         uSun: seaUniforms.uSun,
+        uFogColor: seaUniforms.uFogColor,
+        uGlow: seaUniforms.uGlow,
+        uSunset: seaUniforms.uSunset,
         uIslandR: seaUniforms.uIslandR,
         uBright: seaUniforms.uBright,
         uWindDir: seaUniforms.uWindDir,
@@ -853,24 +1020,32 @@
           gl_Position = projectionMatrix * viewMatrix * wp;
         }`,
       fragmentShader: `
-        uniform float uTime, uIslandR, uBright, uWindStr;
+        uniform float uTime, uIslandR, uBright, uWindStr, uSunset;
         uniform vec2 uWindDir;
-        uniform vec3 uCrest, uMid, uDeep, uSky, uSun, uSunDir;
+        uniform vec3 uCrest, uMid, uDeep, uSky, uSun, uSunDir, uFogColor, uGlow;
         varying vec3 vW;
         varying vec2 vP;
         varying float vH;
-        float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float h21(vec2 p){
+          vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+          p3 += dot(p3, p3.yzx + 33.33);
+          return fract((p3.x + p3.y) * p3.z);
+        }
         float n2(vec2 p){
-          vec2 i = floor(p), f = fract(p);
-          f = f * f * (3.0 - 2.0 * f);
-          return mix(mix(h21(i), h21(i + vec2(1,0)), f.x),
-                     mix(h21(i + vec2(0,1)), h21(i + vec2(1,1)), f.x), f.y);
+          vec2 i00 = floor(p);
+          vec2 i10 = floor(p + vec2(1.0, 0.0));
+          vec2 i01 = floor(p + vec2(0.0, 1.0));
+          vec2 i11 = floor(p + vec2(1.0, 1.0));
+          vec2 f = fract(p);
+          f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+          return mix(mix(h21(i00), h21(i10), f.x),
+                     mix(h21(i01), h21(i11), f.x), f.y);
         }
         void main(){
           // 浪高归一化：0 谷底 / 1 峰顶
           float hh = clamp(vH * 0.34 + 0.46, 0.0, 1.0);   // 含涌浪的总振幅约 2.4
 
-          // 三层噪声：模拟密集花瓣的堆叠颗粒感
+          // 三层噪声 + 顺风流纹：模拟密集花瓣聚集成带的丝绒纹理
           vec2 wDrift = uWindDir * uTime * 0.055 * uWindStr;
           float pn1 = n2(vP * 1.15 + vec2(uTime * 0.05, -uTime * 0.041) - wDrift);
           float pn2 = n2(vP * 4.2 - vec2(uTime * 0.09, uTime * 0.068) - wDrift * 1.6);
@@ -878,35 +1053,54 @@
           float pn4 = n2(vP * 34.0 - vec2(uTime * 0.22, -uTime * 0.19));
           float petals = pn1 * 0.52 + pn2 * 0.26 + pn3 * 0.14 + pn4 * 0.08;
 
-          // 浪谷深玫红 → 浪腰粉 → 浪峰近白
-          vec3 col = mix(uDeep, uMid, smoothstep(0.06, 0.60, hh));
-          col = mix(col, uCrest, smoothstep(0.56, 1.0, hh) * 0.62);
+          // 花瓣流带（沿着波峰与风向汇聚的浅粉花瓣纹）
+          vec2 flowUv = vP * vec2(0.38, 0.62) - wDrift * 0.8 + vec2(pn1 * 0.65, pn2 * 0.45);
+          float ribbonBand = smoothstep(0.54, 0.82, n2(flowUv * 1.8));
+
+          // 浪谷深玫红 → 浪腰樱粉 → 浪峰暖粉白
+          vec3 col = mix(uDeep, uMid, smoothstep(0.06, 0.58, hh));
+          col = mix(col, uCrest, smoothstep(0.52, 0.98, hh) * 0.68);
+          col = mix(col, uCrest, ribbonBand * smoothstep(0.28, 0.85, hh) * 0.28);
 
           // 花瓣颗粒让颜色起伏，避免像液体
-          col *= 0.88 + petals * 0.26;
+          col *= 0.89 + petals * 0.25;
 
           // 区域色相微差
-          col = mix(col, uDeep * 1.14, smoothstep(0.50, 0.95, pn1) * 0.15);
+          col = mix(col, uDeep * 1.14, smoothstep(0.50, 0.95, pn1) * 0.14);
 
           // 浪尖白花瓣沫
-          float foam = smoothstep(0.68, 0.96, hh) * smoothstep(0.52, 0.92, petals);
-          col = mix(col, vec3(1.0, 0.972, 0.982), foam * 0.55);
+          float foam = smoothstep(0.66, 0.95, hh) * smoothstep(0.48, 0.90, petals);
+          col = mix(col, vec3(1.0, 0.972, 0.985), foam * 0.58);
 
           // 掠射角泛起天光
           vec3 V = normalize(cameraPosition - vW);
-          float fres = pow(1.0 - clamp(V.y, 0.0, 1.0), 3.0);
-          col = mix(col, uSky * 0.80, fres * 0.26);
+          float fres = pow(1.0 - clamp(V.y, 0.0, 1.0), 3.2);
+          col = mix(col, uSky * 0.82, fres * 0.22);
 
           // 花瓣反光的碎亮光
           vec3 Hv = normalize(normalize(uSunDir) + V);
-          float glint = pow(clamp(dot(Hv, vec3(0.0, 1.0, 0.0)), 0.0, 1.0), 48.0);
-          col += uSun * glint * (0.20 + petals * 0.40) * 0.34;
+          float glint = pow(clamp(dot(Hv, vec3(0.0, 1.0, 0.0)), 0.0, 1.0), 42.0);
+          col += uSun * glint * (0.22 + petals * 0.42) * 0.36;
 
-          // 岛周围堆一层厚厚的花瓣（岸线）
-          float shore = 1.0 - smoothstep(uIslandR, uIslandR + 4.5, length(vP));
-          col = mix(col, uCrest, shore * 0.22);
+          // 岛周围堆一层厚厚的花瓣（柔化岸线过渡）
+          float rDist = length(vP);
+          float shore = 1.0 - smoothstep(uIslandR * 0.96, uIslandR + 4.2, rDist);
+          col = mix(col, uCrest, shore * 0.28);
 
-          gl_FragColor = vec4(col * uBright, 1.0);
+          vec3 finalCol = col * uBright;
+
+          // 远景地平线暮霭融合：仅在远海(r=46~68，衔接远山山脚)渐入霞雾，既不冲淡中近景花海，又彻底消除海山硬切线
+          float horizonFade = smoothstep(45.0, 68.5, rDist);
+          if (horizonFade > 0.0) {
+            vec2 dh = normalize(vP + vec2(1e-5));
+            vec2 sh = normalize(uSunDir.xz + vec2(1e-5));
+            float toward = pow(clamp(dot(dh, sh) * 0.5 + 0.5, 0.0, 1.0), 1.8);
+            vec3 mistCol = mix(uFogColor, uMid * uBright * 0.95 + uSky * 0.18, 0.32);
+            mistCol = mix(mistCol, uGlow * 0.90 + vec3(0.08, 0.04, 0.06), toward * uSunset * 0.38);
+            finalCol = mix(finalCol, mistCol, horizonFade * 0.92);
+          }
+
+          gl_FragColor = vec4(finalCol, 1.0);
         }`,
     });
     const m = new T.Mesh(geo, mat);
@@ -977,8 +1171,8 @@
       uniforms: {
         uTime: seaUniforms.uTime,
         uSunDir: seaUniforms.uSunDir,
-        uC1: { value: new T.Color(0xffe3ee) },
-        uC2: { value: new T.Color(0xf3a9c7) },
+        uCrest: seaUniforms.uCrest,
+        uMid: seaUniforms.uMid,
         uSunCol: { value: new T.Color(0xfff3e2) },
         uBright: seaUniforms.uBright,
         uWindDir: seaUniforms.uWindDir,
@@ -1009,13 +1203,13 @@
           p.xz = mat2(cs, -sn, sn, cs) * p.xz;
           p.y += sin(uTime * 1.7 + aSeed * 6.2831) * 0.012;
           vec4 wp = modelMatrix * im * vec4(p, 1.0);
-          wp.y += h + 0.02;
+          wp.y += h + 0.024;
           vW = wp.xyz;
           vNw = normalize(mat3(im) * normal);
           gl_Position = projectionMatrix * viewMatrix * wp;
         }`,
       fragmentShader: `
-        uniform vec3 uC1, uC2, uSunDir, uSunCol;
+        uniform vec3 uCrest, uMid, uSunDir, uSunCol;
         uniform float uBright;
         varying float vSeed;
         varying vec3 vNw;
@@ -1024,12 +1218,11 @@
           vec3 N = normalize(vNw);
           vec3 L = normalize(uSunDir);
           float ndl = abs(dot(N, L));
-          float lit = 0.45 + ndl * 0.75;
-          vec3 col = mix(uC2, uC1, vSeed);
+          // 与海面同色系但略亮，表现漂浮在浪面的透光樱花瓣，彻底消除深紫黑碎斑感
+          vec3 col = mix(uMid, uCrest, 0.38 + 0.62 * vSeed);
+          float lit = 0.80 + ndl * 0.34;
           col *= lit;
-          // 天光补一点蓝
-          col += vec3(0.06, 0.09, 0.14) * (0.4 + 0.6 * N.y);
-          col += uSunCol * pow(ndl, 6.0) * 0.18;
+          col += uSunCol * pow(ndl, 4.0) * 0.16;
           gl_FragColor = vec4(col * uBright, 1.0);
         }`,
     });
@@ -1042,8 +1235,9 @@
       const rr = 5.2 + Math.pow(R(), 1.35) * 38.0;
       const a = R() * TAU;
       dummy.position.set(Math.cos(a) * rr, 0, Math.sin(a) * rr);
-      dummy.rotation.set((R() - 0.5) * 1.5, R() * TAU, (R() - 0.5) * 1.5);
-      const s = 1.15 + R() * 1.45;
+      // 平铺贴浪面微倾，不再竖立产生暗黑背光面（保持 6 次 R() 调用）
+      dummy.rotation.set((R() - 0.5) * 0.48, R() * TAU, (R() - 0.5) * 0.48);
+      const s = 1.05 + R() * 1.25;
       dummy.scale.setScalar(s);
       dummy.updateMatrix();
       inst.setMatrixAt(i, dummy.matrix);
@@ -1239,13 +1433,13 @@
     const N = 1900;
     const geo = makeSeaPetalGeo();
     const mat = new T.MeshStandardMaterial({
-      color: 0xf5b3cc,
-      roughness: 0.95,
+      color: 0xffe4ef,
+      roughness: 0.90,
       metalness: 0.0,
       envMapIntensity: 0.12,
       side: T.DoubleSide,
-      emissive: 0xffc4da,
-      emissiveIntensity: 0.03,
+      emissive: 0xffb8d2,
+      emissiveIntensity: 0.36,
     });
     const inst = new T.InstancedMesh(geo, mat, N);
     inst.instanceMatrix.setUsage(T.DynamicDrawUsage);

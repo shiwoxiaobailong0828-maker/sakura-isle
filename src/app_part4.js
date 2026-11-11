@@ -249,12 +249,12 @@
       exposure: 0.74, bloom: 0.30, tint: 0xfff8ee, sat: 1.10,
     },
     dusk: {
-      skyTop: 0x1f3b6b, skyMid: 0xc98a6e, skyBot: 0xf0c48c,
-      sunDir: [-0.62, 0.40, -0.50], sunColor: 0xffbd7a, sunInt: 2.60,
-      hemiSky: 0xa9b2d8, hemiGnd: 0x5b4634, hemiInt: 0.72,
-      fog: 0xe0b795, fogD: 0.0060,
-      cloud: 0.26, cloudTint: 0xffd8a8, glow: 0xff8a3a, sunset: 1.00, shadowTint: 0xa9a6cc, hiTint: 0xffe6c8,
-      exposure: 0.88, bloom: 0.28, tint: 0xffe8cc, sat: 1.24,
+      skyTop: 0x263868, skyMid: 0xd47e6a, skyBot: 0xf6c28b,
+      sunDir: [-0.62, 0.40, -0.50], sunColor: 0xffc282, sunInt: 2.65,
+      hemiSky: 0xb2b6dc, hemiGnd: 0x5b4634, hemiInt: 0.76,
+      fog: 0xe4b296, fogD: 0.0056,
+      cloud: 0.34, cloudTint: 0xffd6a6, glow: 0xff7e3e, sunset: 1.00, shadowTint: 0xb0a8cf, hiTint: 0xffe8cc,
+      exposure: 0.88, bloom: 0.28, tint: 0xffead2, sat: 1.22,
     },
     night: {
       skyTop: 0x050a18, skyMid: 0x14213d, skyBot: 0x2a3550,
@@ -271,7 +271,7 @@
     morning:   { deep: 0xc0698f, mid: 0xefb6ca, crest: 0xfff4f8, sky: 0xc8dcf0, bright: 1.00 },
     noon:      { deep: 0xc85f8e, mid: 0xefa9c4, crest: 0xfff2f7, sky: 0xa8c8e8, bright: 1.06 },
     afternoon: { deep: 0xbe5f8b, mid: 0xeaa6c1, crest: 0xffeff6, sky: 0x9dc2e4, bright: 1.00 },
-    dusk:      { deep: 0x8e4265, mid: 0xd98e7c, crest: 0xffdcb8, sky: 0xd9a07e, bright: 0.86 },
+    dusk:      { deep: 0x863b62, mid: 0xdc8896, crest: 0xffe2ca, sky: 0xe29e88, bright: 0.90 },
     night:     { deep: 0x121a30, mid: 0x2b3556, crest: 0x8894bb, sky: 0x1b2747, bright: 0.30 },
   };
 
@@ -324,7 +324,8 @@
     seaUniforms.uBright.value = sp.bright;
     state.seaBrightBase = sp.bright;
     if (typeof spray !== 'undefined' && spray && spray.inst) {
-      spray.inst.material.color.setHex(0xf5b3cc).multiplyScalar(0.35 + sp.bright * 0.75);
+      spray.inst.material.color.setHex(0xffe4ef).multiplyScalar(0.45 + sp.bright * 0.65);
+      spray.inst.material.emissiveIntensity = 0.38 * sp.bright;
     }
 
     document.querySelectorAll('[data-time]').forEach(b => b.classList.toggle('on', b.dataset.time === name));

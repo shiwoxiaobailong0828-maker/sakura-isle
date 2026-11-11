@@ -9,18 +9,19 @@
     for (let b = 0; b < BLADES; b++) {
       const a = (b / BLADES) * TAU + (b % 2) * 0.35;
       const ca = Math.cos(a), sa = Math.sin(a);
-      const w = 0.0115;
-      const h = 0.10 + 0.055 * (b % 3);
-      const lean = 0.030 + 0.016 * (b % 3);
+      const w = 0.0155;
+      const h = 0.12 + 0.065 * (b % 3);
+      const lean = 0.036 + 0.020 * (b % 3);
       // 三角形叶片（底宽顶尖）
       pos.push(-w * sa, 0, w * ca);
       pos.push(w * sa, 0, -w * ca);
       pos.push(ca * lean, h, sa * lean);
-      const deep = 0.34 + 0.12 * (b / BLADES);
-      col.push(deep * 0.62, deep, deep * 0.34);
-      col.push(deep * 0.62, deep, deep * 0.34);
-      col.push(deep * 1.55, deep * 2.1, deep * 0.95);
-      nor.push(0, 1, 0, 0, 1, 0, 0, 1, 0);
+      // 修正顶点色与实例色双重相乘导致的发黑问题：根部温润苔绿、叶尖柔亮春绿
+      const v0 = 0.86 + 0.14 * (b / BLADES);
+      col.push(0.48 * v0, 0.60 * v0, 0.34 * v0);
+      col.push(0.48 * v0, 0.60 * v0, 0.34 * v0);
+      col.push(1.05 * v0, 1.22 * v0, 0.70 * v0);
+      nor.push(ca * 0.25, 0.94, sa * 0.25, ca * 0.25, 0.94, sa * 0.25, ca * 0.35, 0.90, sa * 0.35);
       idx.push(vo, vo + 1, vo + 2);
       vo += 3;
     }
@@ -31,9 +32,9 @@
     geo.setIndex(idx);
     sanitize(geo);
 
-    const COUNT = 11500;
+    const COUNT = 8200;
     const mat = new T.MeshStandardMaterial({
-      vertexColors: true, side: T.DoubleSide, roughness: 0.88, metalness: 0,
+      vertexColors: true, side: T.DoubleSide, roughness: 0.82, metalness: 0, envMapIntensity: 0.35,
     });
     mat.onBeforeCompile = (sh) => {
       sh.uniforms.uTime = grassUniforms.uTime;
@@ -85,9 +86,9 @@
       dummy.scale.set(s * (0.85 + R() * 0.35), s * (0.75 + R() * 0.6), s);
       dummy.updateMatrix();
       inst.setMatrixAt(i, dummy.matrix);
-      // 深浅斑驳
+      // 深浅斑驳（提高明度与暖春绿饱和度，避免与顶点色叠乘后发暗）
       const k = fbm(x * 2.2 + 9, 0.5, z * 2.2, 2);
-      c.setHSL(0.245 + k * 0.028, 0.42 + k * 0.14, 0.26 + R() * 0.13);
+      c.setHSL(0.255 + k * 0.032, 0.44 + k * 0.12, 0.46 + R() * 0.14);
       inst.setColorAt(i, c);
       i++;
     }
@@ -444,13 +445,13 @@
     }
     geo.computeVertexNormals();
     const mat = new T.MeshStandardMaterial({
-      color: 0xffc2d6,
-      roughness: 0.95,          // 花瓣是漫反射材质，不能有镜面高光
+      color: 0xffd8e6,
+      roughness: 0.90,          // 花瓣是漫反射材质，不能有镜面高光
       metalness: 0.0,
-      envMapIntensity: 0.08,    // 环境反射压到最低，避免反射天空变成青色亮斑
+      envMapIntensity: 0.14,    // 环境反射压到最低，避免反射天空变成青色亮斑
       side: T.DoubleSide,
-      emissive: 0xffc8da,
-      emissiveIntensity: 0.02,
+      emissive: 0xffb8d2,
+      emissiveIntensity: 0.32,  // 增强逆光透光感，飘落花瓣不发灰暗
     });
     const inst = new T.InstancedMesh(geo, mat, PETAL_N);
     inst.instanceMatrix.setUsage(T.DynamicDrawUsage);
@@ -559,8 +560,8 @@
           dummy.updateMatrix();
           inst.setMatrixAt(idx, dummy.matrix);
           const up = clamp(py / (H0 * 1.7), 0, 1);
-          const v = (0.085 + R() * 0.075) * (0.55 + up * 0.85);
-          col.setRGB(v * 0.56, v * 1.55, v * 0.50);
+          const v = (0.14 + R() * 0.09) * (0.65 + up * 0.88);
+          col.setRGB(v * 0.62, v * 1.48, v * 0.46);
           inst.setColorAt(idx, col);
           idx++;
         }
@@ -572,21 +573,21 @@
       group.add(inst);
     }
 
-    // ---- 野花：细小彩色花点，成片分布 ----
+    // ---- 野花：精致簇状点缀，温润粉白紫黄配色 ----
     {
-      const N = 2400;
-      const geo = new T.CircleGeometry(0.040, 6);
+      const N = 860;
+      const geo = new T.CircleGeometry(0.035, 5);
       geo.rotateX(-Math.PI / 2);
       const mat = new T.MeshStandardMaterial({
-        vertexColors: false, side: T.DoubleSide, roughness: 0.9, metalness: 0,
-        envMapIntensity: 0.15,
+        vertexColors: false, side: T.DoubleSide, roughness: 0.86, metalness: 0,
+        envMapIntensity: 0.18, emissive: 0xffeef4, emissiveIntensity: 0.08,
       });
       const inst = new T.InstancedMesh(geo, mat, N);
       inst.frustumCulled = false;
       const dummy = new T.Object3D();
       const palette = [
-        0xffffff, 0xff9ec4, 0xffd24d, 0xff8a3d,
-        0xb18cff, 0x6fc0ff, 0xff5f8a, 0xffe066,
+        0xfff6f0, 0xffc8dc, 0xffdfea, 0xffe898,
+        0xd8c2ff, 0xaed8ff, 0xffb3cc, 0xfff0c2,
       ];
       const col = new T.Color();
       let placed = 0, guard = 0;
@@ -595,12 +596,12 @@
         const a = R() * TAU, rr = Math.sqrt(R()) * (IR - 0.30);
         const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
         if (blocked(x, z)) continue;
-        // 成片：噪声控制密度
-        const cl = fbm(x * 2.2 + 5, 0.7, z * 2.2 - 3, 2);
-        if (cl < -0.18 && R() < 0.72) continue;
+        // 成簇聚合：噪波控制成片花丛，留出干净草坪呼吸空间
+        const cl = fbm(x * 2.4 + 5, 0.7, z * 2.4 - 3, 2);
+        if (cl < -0.05 && R() < 0.82) continue;
         dummy.position.set(x, 0.085 + R() * 0.03, z);
         dummy.rotation.set(0, R() * TAU, 0);
-        const sc = 0.7 + R() * 0.9;
+        const sc = 0.65 + R() * 0.75;
         dummy.scale.set(sc, sc, sc);
         dummy.updateMatrix();
         inst.setMatrixAt(placed, dummy.matrix);
@@ -615,7 +616,7 @@
       group.add(inst);
     }
 
-    // ---- 青苔景石 ----
+    // ---- 青苔景石（含岸线半浸礁石） ----
     {
       const rockGeos = [];
       const N_ROCK = 7;
@@ -643,17 +644,49 @@
           const vy = p.getY(vi);
           const up = smoothstep(-s * 0.22, s * 0.50, vy);
           // 底部石灰、顶部青苔
-          const g0 = 0.30 + vy * 0.02;
-          cols[vi * 3]     = lerp(g0, 0.16, up);
-          cols[vi * 3 + 1] = lerp(g0 * 0.98, 0.40, up);
-          cols[vi * 3 + 2] = lerp(g0 * 0.94, 0.15, up);
+          const g0 = 0.34 + vy * 0.02;
+          cols[vi * 3]     = lerp(g0, 0.22, up);
+          cols[vi * 3 + 1] = lerp(g0 * 0.96, 0.48, up);
+          cols[vi * 3 + 2] = lerp(g0 * 0.92, 0.20, up);
         }
         g.setAttribute('color', new T.BufferAttribute(cols, 3));
         rockGeos.push(g.clone().translate(x, s * 0.45, z));
       }
+      // 岸线礁石：使用独立种子 sr 压住岛沿，打破圆盘生硬轮廓且不影响主随机流
+      const sr = rng(8821);
+      const shoreAngles = [0.38, 1.42, 2.58, 3.85, 5.15];
+      for (let i = 0; i < shoreAngles.length; i++) {
+        const a = shoreAngles[i] + (sr() - 0.5) * 0.18;
+        const lobe = 1
+          + 0.045 * Math.sin(a * 7 + 0.9)
+          + 0.025 * Math.cos(a * 13 - 0.6);
+        const rr = IR * lobe * (0.95 + sr() * 0.05);
+        const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+        const s = 0.20 + sr() * 0.16;
+        const g = new T.SphereGeometry(s, 8, 6);
+        const p = g.attributes.position;
+        for (let vi = 0; vi < p.count; vi++) {
+          const vx = p.getX(vi), vy = p.getY(vi), vz = p.getZ(vi);
+          const n = fbm(vx * 12 + i * 5, vy * 12, vz * 12, 2) * 0.32;
+          p.setXYZ(vi, vx * (1.25 + n), vy * (0.62 + n * 0.45), vz * (1.10 + n));
+        }
+        g.computeVertexNormals();
+        const cnt = p.count;
+        const cols = new Float32Array(cnt * 3);
+        for (let vi = 0; vi < cnt; vi++) {
+          const vy = p.getY(vi);
+          const up = smoothstep(-s * 0.15, s * 0.45, vy);
+          const g0 = 0.30 + vy * 0.02;
+          cols[vi * 3]     = lerp(g0, 0.24, up);
+          cols[vi * 3 + 1] = lerp(g0 * 0.95, 0.46, up);
+          cols[vi * 3 + 2] = lerp(g0 * 0.90, 0.22, up);
+        }
+        g.setAttribute('color', new T.BufferAttribute(cols, 3));
+        rockGeos.push(g.clone().translate(x, -0.04, z));
+      }
       if (rockGeos.length) {
         const rm = new T.Mesh(mergeGeos(rockGeos), new T.MeshStandardMaterial({
-          vertexColors: true, roughness: 0.95, metalness: 0, envMapIntensity: 0.2,
+          vertexColors: true, roughness: 0.92, metalness: 0, envMapIntensity: 0.24,
         }));
         rm.castShadow = true; rm.receiveShadow = true;
         group.add(rm);
@@ -726,89 +759,141 @@
     return { g, wingL, wingR };
   }
 
-  /* ---- 蝴蝶：前翅 + 后翅 + 身体 + 触角 ---- */
+  /* ---- 蝴蝶：3D 弧面双层凤蝶翼（含翅脉拱度/燕尾/斑纹顶点色） + 头胸腹分段体 + 曲弧触角 ---- */
   function makeButterflyMesh(colorHex) {
     const g = new T.Group();
+    const baseCol = new T.Color(colorHex);
+    const hsl = {};
+    baseCol.getHSL(hsl);
+    const innerCol = new T.Color().setHSL((hsl.h + 0.04) % 1.0, Math.min(1, hsl.s * 1.15), Math.min(0.92, hsl.l * 1.18));
+    const tipCol = new T.Color().setHSL((hsl.h - 0.05 + 1.0) % 1.0, Math.min(1, hsl.s * 1.08), Math.max(0.38, hsl.l * 0.86));
+    const darkBorder = new T.Color(0x231520);
+    const spotCol = new T.Color(0xfff7ee);
+
     const wingMat = new T.MeshStandardMaterial({
-      color: colorHex, roughness: 0.62, metalness: 0.0,
-      side: T.DoubleSide, envMapIntensity: 0.25,
-      emissive: colorHex, emissiveIntensity: 0.18,
+      vertexColors: true, roughness: 0.48, metalness: 0.04,
+      side: T.DoubleSide, envMapIntensity: 0.35,
+      emissive: baseCol, emissiveIntensity: 0.24,
     });
-    const edgeMat = new T.MeshStandardMaterial({
-      color: 0x2b1f2a, roughness: 0.7, metalness: 0.0, side: T.DoubleSide,
-    });
-    const bodyMat = new T.MeshStandardMaterial({ color: 0x2a1d18, roughness: 0.85, metalness: 0 });
+    const bodyMat = new T.MeshStandardMaterial({ color: 0x261a1d, roughness: 0.72, metalness: 0.05 });
 
-    // 前翅（水滴状多边形）
-    function foreWing() {
-      const s = [
-        0, 0,
-        0.055, 0.030,
-        0.098, 0.072,
-        0.092, 0.118,
-        0.045, 0.126,
-        0.008, 0.086,
-      ];
+    // 构造带三维拱度(Camber)、翅脉起伏与斑纹顶点色的曲面蝶翼（side = 1 左翼 +X，side = -1 右翼 -X）
+    function buildCurvedWingGeo(side, isFore) {
+      const NU = 10; // 展向分段（根 → 尖）
+      const NV = 8;  // 弦向分段（前缘 → 后缘）
+      const pos = [], col = [], idx = [];
+      for (let iu = 0; iu <= NU; iu++) {
+        const u = iu / NU; // 0=翅根, 1=翅尖
+        for (let iv = 0; iv <= NV; iv++) {
+          const v = iv / NV; // 0=前缘, 1=后缘
+          let span, zFront, zBack;
+          if (isFore) {
+            // 前翅：修长优雅的凤蝶前翼轮廓，外缘微具波状瓣感
+            const scallop = 1.0 + 0.032 * Math.sin(v * Math.PI * 3.0) * smoothstep(0.55, 1.0, u);
+            span = 0.125 * Math.pow(u, 0.82) * (1.0 - 0.14 * Math.pow(v, 1.6)) * scallop;
+            zFront = 0.010 + 0.118 * Math.sin(u * Math.PI * 0.56) - 0.012 * u * u;
+            zBack  = 0.002 - 0.018 * Math.sin(u * Math.PI * 0.85) + 0.022 * Math.pow(u, 1.7);
+          } else {
+            // 后翅：饱满圆瓣 + 外缘波浪 + 凤蝶标志性燕尾突起(tailLobe)
+            const tailGate = Math.exp(-Math.pow((v - 0.68) / 0.13, 2.0)) * smoothstep(0.60, 1.0, u);
+            const scallop = 1.0 + 0.045 * Math.sin(v * Math.PI * 4.0) * smoothstep(0.50, 1.0, u);
+            span = (0.092 * Math.sin(u * Math.PI * 0.52) * (1.0 - 0.22 * v * v) * scallop) + tailGate * 0.018;
+            zFront = -0.002 - 0.006 * u;
+            zBack  = -0.012 - 0.095 * Math.sin(u * Math.PI * 0.62) - tailGate * 0.038;
+          }
+          const x = side * span;
+          const z = lerp(zFront, zBack, v);
+
+          // 三维立体拱面：中段隆起 + 前缘刚性支撑 + 翅脉微波纹 + 翼尖微翘，彻底告别扁平纸片
+          const archU = Math.sin(u * Math.PI) * 0.022;
+          const archV = Math.sin(v * Math.PI) * (isFore ? 0.014 : 0.012) * u;
+          const veinRipple = Math.sin(v * Math.PI * (isFore ? 4.0 : 5.0)) * 0.0028 * u;
+          const tipCurl = Math.pow(u, 2.6) * (isFore ? 0.010 : -0.006);
+          const y = archU + archV + veinRipple + tipCurl;
+          pos.push(x, y, z);
+
+          // 翅膀花纹着色：翅根深绒黑 → 中心亮彩 → 翼缘黑框 + 珍珠亮斑
+          const rootDark = smoothstep(0.0, 0.22, u);
+          const edgeDark = smoothstep(0.76, 0.96, u) * 0.88 + smoothstep(0.84, 0.99, v) * 0.45;
+          const c = new T.Color().copy(innerCol).lerp(tipCol, smoothstep(0.25, 0.85, u));
+          // 翅脉细微深浅纹理
+          const veinTone = 0.92 + 0.08 * Math.cos(v * Math.PI * 5.0);
+          c.multiplyScalar(veinTone);
+          // 翅根暗部与外缘深色镶边
+          c.lerp(darkBorder, 1.0 - rootDark);
+          c.lerp(darkBorder, clamp(edgeDark, 0, 0.88));
+          // 外缘内侧珍珠亮斑点缀
+          const spotU = Math.exp(-Math.pow((u - 0.84) / 0.065, 2.0));
+          const spotV = Math.pow(Math.max(0, Math.sin(v * Math.PI * 4.0)), 3.0);
+          c.lerp(spotCol, spotU * spotV * 0.78);
+          col.push(c.r, c.g, c.b);
+        }
+      }
+      for (let iu = 0; iu < NU; iu++) {
+        for (let iv = 0; iv < NV; iv++) {
+          const a = iu * (NV + 1) + iv;
+          const b = a + 1;
+          const c = (iu + 1) * (NV + 1) + iv;
+          const d = c + 1;
+          if (side > 0) idx.push(a, c, b, b, c, d);
+          else idx.push(a, b, c, b, d, c);
+        }
+      }
       const geo = new T.BufferGeometry();
-      const pos = [];
-      for (let i = 0; i < s.length; i += 2) pos.push(s[i], 0, s[i + 1]);
-      const idx = [];
-      for (let i = 1; i < s.length / 2 - 1; i++) idx.push(0, i, i + 1);
       geo.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('color', new T.Float32BufferAttribute(col, 3));
       geo.setIndex(idx);
       geo.computeVertexNormals();
       return geo;
     }
-    // 后翅（较小的圆瓣）
-    function hindWing() {
-      const s = [
-        0, 0,
-        0.052, -0.006,
-        0.082, -0.046,
-        0.058, -0.086,
-        0.018, -0.070,
-      ];
-      const geo = new T.BufferGeometry();
-      const pos = [];
-      for (let i = 0; i < s.length; i += 2) pos.push(s[i], 0, s[i + 1]);
-      const idx = [];
-      for (let i = 1; i < s.length / 2 - 1; i++) idx.push(0, i, i + 1);
-      geo.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
-      geo.setIndex(idx);
-      geo.computeVertexNormals();
-      return geo;
-    }
 
-    function wingPair() {
+    function makeSideWings(side) {
       const grp = new T.Group();
-      const fw = new T.Mesh(foreWing(), wingMat);
-      const hw = new T.Mesh(hindWing(), wingMat);
-      hw.position.y = -0.002;
-      grp.add(fw); grp.add(hw);
-      return grp;
+      grp.position.set(side * 0.006, 0.004, 0.006);
+      const fw = new T.Mesh(buildCurvedWingGeo(side, true), wingMat);
+      const hw = new T.Mesh(buildCurvedWingGeo(side, false), wingMat);
+      hw.position.y = -0.0025;
+      // 自然静息时双翼呈微上扬 V 字立角，任何视角下都有立体纵深
+      grp.add(fw);
+      grp.add(hw);
+      return { grp, fw, hw };
     }
-    const wLeft = wingPair();
-    const wRight = wingPair();
-    wRight.scale.x = -1;
-    g.add(wLeft); g.add(wRight);
 
-    // 身体
-    const body = new T.Mesh(new T.CapsuleGeometry(0.0065, 0.055, 4, 8), bodyMat);
-    body.rotation.x = Math.PI / 2;
-    g.add(body);
+    const leftW = makeSideWings(1);
+    const rightW = makeSideWings(-1);
+    g.add(leftW.grp);
+    g.add(rightW.grp);
 
-    // 触角
+    // 立体躯干：头 + 胸 + 腹三段式，替代原先单根细棍
+    const thorax = new T.Mesh(new T.SphereGeometry(0.0105, 8, 6), bodyMat);
+    thorax.scale.set(0.85, 0.95, 1.65);
+    thorax.position.set(0, 0.002, 0.010);
+    g.add(thorax);
+
+    const head = new T.Mesh(new T.SphereGeometry(0.0082, 8, 6), bodyMat);
+    head.position.set(0, 0.006, 0.030);
+    g.add(head);
+
+    const abdomen = new T.Mesh(new T.CapsuleGeometry(0.0062, 0.044, 4, 8), bodyMat);
+    abdomen.rotation.x = Math.PI / 2 - 0.14;
+    abdomen.position.set(0, -0.003, -0.026);
+    g.add(abdomen);
+
+    // 向前上方自然弯曲的锤状触角
     for (const sx of [-1, 1]) {
-      const ant = new T.Mesh(new T.CylinderGeometry(0.0016, 0.0012, 0.048, 4), bodyMat);
-      ant.position.set(sx * 0.010, 0.046, 0.020);
-      ant.rotation.set(0.5, 0, sx * 0.35);
-      g.add(ant);
-      const tip = new T.Mesh(new T.SphereGeometry(0.0035, 6, 4), bodyMat);
-      tip.position.set(sx * 0.020, 0.070, 0.038);
+      const antPts = [
+        new T.Vector3(sx * 0.004, 0.009, 0.033),
+        new T.Vector3(sx * 0.014, 0.022, 0.050),
+        new T.Vector3(sx * 0.026, 0.030, 0.064),
+      ];
+      const antGeo = tubeGeo(antPts, (t) => lerp(0.0014, 0.0010, t), 5, true);
+      g.add(new T.Mesh(antGeo, bodyMat));
+      const tip = new T.Mesh(new T.SphereGeometry(0.0026, 6, 4), bodyMat);
+      tip.position.copy(antPts[2]);
       g.add(tip);
     }
 
-    return { g, wLeft, wRight };
+    return { g, wLeft: leftW.grp, wRight: rightW.grp, fwL: leftW.fw, hwL: leftW.hw, fwR: rightW.fw, hwR: rightW.hw };
   }
 
   function buildCreatures() {
@@ -848,16 +933,16 @@
       b.g.scale.setScalar(0.85 + R() * 0.45);
       scene.add(b.g);
       butterflyGang.push({
-        g: b.g, wLeft: b.wLeft, wRight: b.wRight,
-        cx: (R() - 0.5) * 4.0,
-        cz: (R() - 0.5) * 4.0,
-        cy: 2.6 + R() * 3.0,
-        rad: 0.8 + R() * 1.4,
-        spdA: 0.5 + R() * 0.7,
-        spdB: 0.35 + R() * 0.6,
+        g: b.g, wLeft: b.wLeft, wRight: b.wRight, hwL: b.hwL, hwR: b.hwR,
+        cx: (R() - 0.5) * 4.2,
+        cz: (R() - 0.5) * 4.2,
+        cy: 1.15 + R() * 2.55,
+        rad: 0.9 + R() * 1.5,
+        spdA: 0.45 + R() * 0.65,
+        spdB: 0.35 + R() * 0.55,
         ph: R() * TAU,
-        flap: 11 + R() * 6,
-        sc: 1.1 + R() * 0.6,
+        flap: 9.5 + R() * 5.0,
+        sc: 1.15 + R() * 0.55,
       });
     }
   }
@@ -878,20 +963,46 @@
       b.wl.rotation.z = f;
       b.wr.rotation.z = -f;
     }
-    // 蝴蝶
+    // 蝴蝶：三维上下扑翼（绕 Z 轴折叠）+ 前后翅相位差 + 扑翼升力起伏 + 真实航向对齐
     for (const b of butterflyGang) {
       const a1 = t * b.spdA + b.ph;
       const a2 = t * b.spdB + b.ph * 1.7;
+      // 间歇滑翔调制：快速翩跹后偶有短暂微张滑翔，神态更逼真
+      const flutterMod = 0.68 + 0.32 * Math.sin(t * 1.6 + b.ph * 2.3);
+      const flapPhase = t * b.flap + b.ph;
+      const wave = Math.sin(flapPhase);
+      // 扑翼角：上扬合拢至 +1.18 rad (68°)，下扑展开至 -0.52 rad (-30°)
+      const flapAngle = 0.34 + wave * 0.84 * flutterMod;
+      // 下扑时身体获得升力微抬，上扬时微沉
+      const bob = -Math.cos(flapPhase) * 0.022 * flutterMod;
+
       const x = b.cx + Math.cos(a1) * b.rad;
-      const z = b.cz + Math.sin(a2) * b.rad * 0.8;
-      const y = b.cy + Math.sin(t * 0.9 + b.ph) * 0.28;
+      const z = b.cz + Math.sin(a2) * b.rad * 0.85;
+      const y = b.cy + Math.sin(t * 0.95 + b.ph) * 0.32 + bob;
       b.g.position.set(x, y, z);
-      b.g.rotation.y = a1 + Math.PI / 2;
-      b.g.rotation.z = Math.sin(t * 1.3 + b.ph) * 0.18;
+
+      // 解析速度向量，让蝶身朝向真实切线方向并自然侧倾
+      const vx = -Math.sin(a1) * b.rad * b.spdA;
+      const vz = Math.cos(a2) * b.rad * 0.85 * b.spdB;
+      b.g.rotation.order = 'YXZ';
+      b.g.rotation.y = Math.atan2(vx, vz);
+      b.g.rotation.x = -0.26 + Math.cos(flapPhase) * 0.10 * flutterMod;
+      b.g.rotation.z = Math.sin(t * 1.4 + b.ph) * 0.22;
       b.g.scale.setScalar(b.sc);
-      const f = 0.55 + Math.sin(t * b.flap + b.ph) * 0.55;
-      b.wLeft.rotation.y = -f;
-      b.wRight.rotation.y = f;
+
+      // ★ 绕 Z 轴上下扇动（修正原先绕 Y 轴水平剪刀式平转导致像扁平纸片的问题）
+      b.wLeft.rotation.z = flapAngle;
+      b.wRight.rotation.z = -flapAngle;
+      // 扑翼伴随轻微前后掠角变化
+      const sweep = Math.cos(flapPhase) * 0.14 * flutterMod;
+      b.wLeft.rotation.y = sweep;
+      b.wRight.rotation.y = -sweep;
+      // 后翅滞后相位，形成柔韧波浪感
+      if (b.hwL && b.hwR) {
+        const lag = Math.cos(flapPhase) * 0.18 * flutterMod;
+        b.hwL.rotation.z = -lag;
+        b.hwR.rotation.z = lag;
+      }
     }
   }
 

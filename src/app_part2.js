@@ -146,12 +146,15 @@
   const branchGeos = [];
   const twigPts = [];          // 细枝采样点，用于判断补花"有没有枝条支撑"
 
-  /* 沿枝条撒花：权重集中在枝梢（t^p），根部几乎不长花 */
-  function addBlossoms(pts, rFn, density, spread, power, scaleBase, bias) {
+  /* 沿枝条撒花：段内连续插值消除"串珠/糖葫芦感"，垂枝饱满连贯且末梢自然收尖 */
+  function addBlossoms(pts, rFn, density, spread, power, scaleBase, bias, isStrand) {
     const steps = pts.length - 1;
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
-      const w = Math.pow(t, power);                 // 末端权重
+      // 垂枝全段保持丰满花量，仅在顶头与最末梢柔和收束；普通细枝保持向枝梢聚集
+      const w = isStrand
+        ? (0.54 + 0.58 * Math.sin(Math.PI * Math.pow(t, 0.65))) * (1.0 - 0.22 * smoothstep(0.85, 1.0, t))
+        : Math.pow(t, power);
       if (w < 0.02) continue;
       // 成团：噪声决定这一簇浓不浓，制造疏密
       const clump = smoothstep(-0.5, 0.35,
@@ -159,19 +162,32 @@
       const localR = rFn(t);
       const n = Math.round(density * w * (0.35 + clump * 1.3) * bias);
       if (n <= 0) continue;
-      const rr0 = localR * 1.4 + spread * (0.42 + t * 0.75) * (0.55 + clump * 0.75);
+      // 垂枝半径在中段蓬松、末梢微收，避免底部结成大圆球
+      const spreadEnv = isStrand
+        ? spread * (0.56 + 0.46 * Math.sin(Math.PI * Math.pow(t, 0.68))) * (0.62 + clump * 0.66) * (1.0 - 0.28 * smoothstep(0.82, 1.0, t))
+        : spread * (0.42 + t * 0.75) * (0.55 + clump * 0.75);
+      const rr0 = localR * 1.35 + spreadEnv;
+      const pPrev = pts[i - 1], pCurr = pts[i];
       for (let k = 0; k < n; k++) {
         const th = R() * TAU;
         const ph = Math.acos(2 * R() - 1);
         const rr = rr0 * Math.cbrt(R());
+        // ★ 沿 [pts[i-1], pts[i]] 黄金分割分层插值，让花朵沿枝条连续铺开而非聚成离散圆球（不额外消耗 R()）
+        const segU = (k + ((k * 0.6180339887) % 1)) / n;
+        const bx = lerp(pPrev.x, pCurr.x, segU);
+        const by = lerp(pPrev.y, pCurr.y, segU);
+        const bz = lerp(pPrev.z, pCurr.z, segU);
+        const hScale = isStrand ? 0.90 : 1.0;
+        const vScale = isStrand ? 1.08 : 0.92;
+        const tipScale = isStrand ? (1.04 - 0.24 * smoothstep(0.80, 1.0, t)) : (0.86 + t * 0.28);
         blossomSpots.push({
           p: new T.Vector3(
-            pts[i].x + Math.sin(ph) * Math.cos(th) * rr,
-            pts[i].y + Math.cos(ph) * rr * 0.92,
-            pts[i].z + Math.sin(ph) * Math.sin(th) * rr
+            bx + Math.sin(ph) * Math.cos(th) * rr * hScale,
+            by + Math.cos(ph) * rr * vScale,
+            bz + Math.sin(ph) * Math.sin(th) * rr * hScale
           ),
           rx: (R() - 0.5) * 1.7, ry: R() * TAU, rz: (R() - 0.5) * 1.7,   // 三轴随机，但不翻背
-          scale: scaleBase * (0.5 + R() * 0.72) * (0.86 + t * 0.28),
+          scale: scaleBase * (0.5 + R() * 0.72) * tipScale,
           tint: R(),
         });
       }
@@ -335,16 +351,23 @@
           dropL = Math.min(dropL, anchor.y - 0.30);
           const outL = 0.16 + R() * 0.26 * (1 - round * 0.15);
           const p0 = anchor.clone();
-          const p3 = new T.Vector3(anchor.x + ox * (outL + 0.10), anchor.y - dropL, anchor.z + oz * (outL + 0.10));
+          // 给垂枝加一点切向微弧度，避免像垂直铅垂线一样僵直
+          const tx = -oz, tz = ox;
+          const sway = Math.sin(bi * 1.73 + round * 2.1) * 0.065 * dropL;
+          const p3 = new T.Vector3(
+            anchor.x + ox * (outL + 0.12) + tx * sway,
+            anchor.y - dropL,
+            anchor.z + oz * (outL + 0.12) + tz * sway
+          );
           const p1 = new T.Vector3(anchor.x + ox * outL * 0.95, anchor.y + 0.08 + R() * 0.06, anchor.z + oz * outL * 0.95);
-          const p2 = new T.Vector3(p3.x - ox * 0.05, p3.y + dropL * 0.46, p3.z - oz * 0.05);
+          const p2 = new T.Vector3(p3.x - ox * 0.04 - tx * sway * 0.45, p3.y + dropL * 0.46, p3.z - oz * 0.04 - tz * sway * 0.45);
           const pts = [];
           const ST = 12;
           for (let s = 0; s <= ST; s++) pts.push(bezierPoint(p0, p1, p2, p3, s / ST));
-          const r0 = 0.014 + R() * 0.006, r1 = 0.003 + R() * 0.002;
+          const r0 = 0.009 + R() * 0.004, r1 = 0.002 + R() * 0.0014;
           const rFn = (t) => lerp(r0, r1, Math.pow(t, 0.72));
           branchGeos.push(colored(tubeGeo(pts, rFn, 5, false), 0x6d5541));
-          addBlossoms(pts, rFn, 42, 0.066, 1.10, 0.70, 1.0);
+          addBlossoms(pts, rFn, 44, 0.066, 1.10, 0.74, 1.0, true);
           made++;
         }
       }
@@ -680,37 +703,53 @@
       sh.uniforms.uSunDir = blossomUniforms.uSunDir;
       sh.uniforms.uSSS = blossomUniforms.uSSS;
 
-      /* ---- vertex：风摆 + 世界坐标/随机数传递 ---- */
+      /* ---- vertex：风摆 + 树冠球面法线柔化（消除碎屑噪点感） + 世界坐标传递 ---- */
       sh.vertexShader = WIND_FIELD_GLSL + `
         attribute float aRand;
         varying vec2 vBUv;
         varying vec3 vBWPos;
         varying float vBRand;
-        ` + sh.vertexShader.replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-         {
-           vBUv = uv;
-           vBRand = aRand;
-           vec3 ip = vec3( 0.0 );
+        ` + sh.vertexShader
+        .replace(
+          '#include <beginnormal_vertex>',
+          `#include <beginnormal_vertex>
            #ifdef USE_INSTANCING
-             ip = ( instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
-           #endif
-           // 与枝条完全相同的位移量 → 整朵花跟着枝条走，不会自己乱抖
-           vec3 wDisp = sakuraWind( ip );
-           #ifdef USE_INSTANCING
-             // 把树内位移换算回实例局部空间，方向才和枝条一致
-             mat3 im3 = mat3( instanceMatrix );
-             float sc2 = dot( im3[ 0 ], im3[ 0 ] );
-             transformed += transpose( im3 ) * wDisp / max( sc2, 1e-4 );
-           #else
-             transformed += wDisp;
-           #endif
-           vBWPos = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
-         }`
-      );
+           {
+             vec3 ipN = ( instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
+             // 树冠球面外向法线与花团局部起伏结合，让每簇花呈饱满云团受光，不再是乱朝向的碎三角
+             vec3 domeN = normalize( ipN - vec3( 0.10, 1.75, -0.28 ) );
+             mat3 im3N = mat3( instanceMatrix );
+             float scN = max( length( im3N[ 0 ] ), 1e-4 );
+             vec3 localDomeN = transpose( im3N ) * domeN / scN;
+             objectNormal = normalize( mix( objectNormal, localDomeN, 0.58 ) );
+           }
+           #endif`
+        )
+        .replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+           {
+             vBUv = uv;
+             vBRand = aRand;
+             vec3 ip = vec3( 0.0 );
+             #ifdef USE_INSTANCING
+               ip = ( instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz;
+             #endif
+             // 与枝条完全相同的位移量 → 整朵花跟着枝条走，不会自己乱抖
+             vec3 wDisp = sakuraWind( ip );
+             #ifdef USE_INSTANCING
+               // 把树内位移换算回实例局部空间，方向才和枝条一致
+               mat3 im3 = mat3( instanceMatrix );
+               float sc2 = dot( im3[ 0 ], im3[ 0 ] );
+               transformed += transpose( im3 ) * wDisp / max( sc2, 1e-4 );
+             #else
+               transformed += wDisp;
+             #endif
+             vBWPos = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
+           }`
+        );
 
-      /* ---- fragment：粉白渐变 + 随机扰动 + 假次表面散射 ---- */
+      /* ---- fragment：粉白渐变 + 树冠体积光影(Canopy AO) + 次表面透光 ---- */
       sh.fragmentShader = `
         uniform vec3 uC1; uniform vec3 uC2; uniform vec3 uC3;
         uniform vec3 uSunDir; uniform float uSSS;
@@ -722,24 +761,41 @@
          {
            float u = vBUv.x;                      // 0 花心 → 1 瓣尖
            float edge = abs( vBUv.y * 2.0 - 1.0 );// 0 中间 → 1 瓣缘
-           // 花心偏粉、瓣尖近白
-           vec3 c = mix( uC2, uC1, smoothstep( 0.0, 0.52, u ) );
-           c = mix( c, uC3, smoothstep( 0.40, 1.0, u ) * ( 0.50 + 0.50 * vBRand ) );
-           // 每朵花的色差
-           c *= 0.91 + 0.14 * vBRand;
-           // 瓣缘更透更白
-           c = mix( c, uC3, pow( edge, 3.0 ) * 0.26 );
+           // 花心偏樱粉、瓣尖近暖白
+           vec3 c = mix( uC2, uC1, smoothstep( 0.0, 0.50, u ) );
+           c = mix( c, uC3, smoothstep( 0.38, 1.0, u ) * ( 0.52 + 0.48 * vBRand ) );
+           c *= 0.93 + 0.11 * vBRand;
+           c = mix( c, uC3, pow( edge, 2.6 ) * 0.28 );
+
+           // ★ 树冠体积光影 (Canopy AO + 花团云朵层次)：内层与底部压出暖紫粉暗部，外冠与顶部通透亮泽
+           vec3 cRel = ( vBWPos - vec3( 0.20, 4.35, -0.55 ) ) / vec3( 3.45, 2.55, 3.45 );
+           float cRad = length( cRel );
+           float shellAO = smoothstep( 0.16, 0.88, cRad ) * ( 0.62 + 0.38 * smoothstep( -0.75, 0.65, cRel.y ) );
+           // ~1.1m 尺度的花团云块起伏，让大树冠分出饱满的团块结构
+           float clumpWave = 0.5 + 0.5 * (
+             sin( vBWPos.x * 2.25 + vBWPos.y * 1.6 ) * cos( vBWPos.z * 2.25 - vBWPos.y * 1.4 ) * 0.65 +
+             sin( vBWPos.x * 4.6 - vBWPos.z * 3.8 ) * 0.35
+           );
+           float occ = clamp( shellAO * ( 0.78 + 0.32 * clumpWave ), 0.0, 1.0 );
+           vec3 innerTint = vec3( 0.83, 0.62, 0.74 );   // 树冠深处暖紫粉暗部
+           vec3 outerTint = vec3( 1.06, 0.99, 0.98 );   // 树冠外缘柔亮粉白
+           c *= mix( innerTint, outerTint, occ );
+
            diffuseColor.rgb *= c;
          }`)
           .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
          {
-           // 假 SSS：边缘透光 + 逆光穿透
+           // 次表面透光 (SSS) + 树冠迎光金粉镶边
            vec3 Nw = normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz );
            vec3 Vw = normalize( cameraPosition - vBWPos );
+           vec3 cRel = ( vBWPos - vec3( 0.20, 4.35, -0.55 ) ) / vec3( 3.45, 2.55, 3.45 );
+           vec3 domeDir = normalize( cRel + vec3( 0.0, 0.35, 0.0 ) );
+           float domeSun = pow( clamp( dot( domeDir, normalize( uSunDir ) ) * 0.5 + 0.5, 0.0, 1.0 ), 1.6 );
+           float outerShell = smoothstep( 0.30, 0.95, length( cRel ) );
            float rim  = pow( clamp( 1.0 - abs( dot( Nw, Vw ) ), 0.0, 1.0 ), 1.8 );
-           float back = pow( clamp( dot( -Nw, uSunDir ), 0.0, 1.0 ), 1.10 );
-           vec3 sssCol = mix( uC1, uC3, 0.5 );
-           float sss = ( rim * 0.040 + back * 0.045 ) * uSSS * ( 0.70 + 0.45 * vBRand );
+           float back = pow( clamp( dot( -Nw, uSunDir ), 0.0, 1.0 ), 1.15 );
+           vec3 sssCol = mix( uC1, vec3( 1.0, 0.92, 0.86 ), 0.55 * domeSun );
+           float sss = ( rim * 0.055 + back * 0.065 + domeSun * outerShell * 0.048 ) * uSSS * ( 0.75 + 0.40 * vBRand );
            totalEmissiveRadiance += sssCol * sss;
          }`);
     };
@@ -780,15 +836,17 @@
   buildBlossoms();          // 2 万多朵花的实例化（较重）
   regInst(blossomMesh, 'blossom');
 
-  /* ---------- 8b. 树枝小灯笼（暖光，参考图里的点睛） ---------- */
+  /* ---------- 8b. 树枝小灯笼（和纸圆润提灯 + 竹骨渐变 + 暖金吊绳 + 随风同摆） ---------- */
   const lanternMats = [];
   const lanternGroups = [];
   function buildLanterns() {
-    // 从细枝采样点里挑出高度合适、彼此分散的位置
-    const cands = twigPts.filter(p => p.y > 1.55 && p.y < 2.9);
+    // 挑选树冠中下层（局部 y ∈ [1.55, 2.48] 中偏下沿）的细枝采样点，让灯笼垂在枝干分叉下方的通透空间
+    const pool = twigPts.filter(p => p.y > 1.55 && p.y < 2.48);
+    pool.sort((a, b) => a.y - b.y);
+    const cands = pool.slice(0, Math.max(40, Math.floor(pool.length * 0.55)));
     if (!cands.length) return;
     const picks = [];
-    const MIN_D = 0.55;
+    const MIN_D = 0.52;
     let guard = 0;
     while (picks.length < 9 && guard < 4000) {
       guard++;
@@ -798,38 +856,102 @@
       if (ok) picks.push(p);
     }
 
+    // 和纸灯身材质：中心暖白高亮 → 上下琥珀橙渐变 + 细微横骨暗纹，消除"橙色便利贴"平面感
     const bodyMat = new T.MeshStandardMaterial({
-      color: 0xffc07a, emissive: 0xff7a2a, emissiveIntensity: 1.9,
-      roughness: 0.6, metalness: 0.0, envMapIntensity: 0.1,
+      color: 0xffe8c2, emissive: 0xff8e3c, emissiveIntensity: 1.85,
+      roughness: 0.55, metalness: 0.0, envMapIntensity: 0.1,
     });
+    const attachWind = (mat, isBody) => {
+      mat.onBeforeCompile = (sh) => {
+        sh.uniforms.uTime = TREE_WIND.uTime;
+        sh.uniforms.uWind = TREE_WIND.uWind;
+        sh.uniforms.uWindDir = TREE_WIND.uWindDir;
+        sh.uniforms.uGust = TREE_WIND.uGust;
+        sh.vertexShader = WIND_FIELD_GLSL + (isBody ? 'varying float vLY;\n' : '') + sh.vertexShader.replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+           ${isBody ? 'vLY = clamp(position.y * 8.5 + 0.5, 0.0, 1.0);' : ''}
+           {
+             vec3 wpL = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz / ${TREE_SCALE.toFixed(2)};
+             transformed += sakuraWind( wpL );
+           }`
+        );
+        if (isBody) {
+          sh.fragmentShader = 'varying float vLY;\n' + sh.fragmentShader.replace(
+            '#include <emissivemap_fragment>',
+            `#include <emissivemap_fragment>
+             {
+               // 纵向中心亮芯 + 横向竹骨纹理
+               float cy = 1.0 - abs( vLY * 2.0 - 1.0 );
+               float core = smoothstep( 0.0, 0.88, cy );
+               float ribs = 0.88 + 0.12 * cos( vLY * 31.4159 );
+               vec3 coreGlow = mix( vec3( 0.96, 0.42, 0.14 ), vec3( 1.42, 1.12, 0.74 ), pow( core, 1.4 ) );
+               totalEmissiveRadiance *= coreGlow * ribs;
+             }`
+          );
+        }
+      };
+    };
+    attachWind(bodyMat, true);
     lanternMats.push(bodyMat);
-    const capMat = new T.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.9, metalness: 0 });
-    const cordMat = new T.MeshStandardMaterial({ color: 0x2a2018, roughness: 1.0, metalness: 0 });
+
+    const capMat = new T.MeshStandardMaterial({ color: 0x2c1d14, roughness: 0.82, metalness: 0.08 });
+    attachWind(capMat, false);
+    // 吊绳加粗并带暖金受光感，远景也能清晰看出灯笼是挂在枝头的
+    const cordMat = new T.MeshStandardMaterial({
+      color: 0xd8a868, emissive: 0x8c5822, emissiveIntensity: 0.58, roughness: 0.75, metalness: 0,
+    });
+    attachWind(cordMat, false);
+    const tasselMat = new T.MeshStandardMaterial({
+      color: 0xd94830, emissive: 0x9e2a18, emissiveIntensity: 0.42, roughness: 0.8, metalness: 0,
+    });
+    attachWind(tasselMat, false);
+
+    // 构造圆润提灯几何（中段鼓起的和纸提灯廓形，替代生硬直筒）
+    function makeChochinGeo(rBase, h) {
+      const geo = new T.CylinderGeometry(rBase * 0.72, rBase * 0.72, h, 16, 10);
+      const pos = geo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const y = pos.getY(i);
+        const u = clamp(y / h + 0.5, 0, 1);
+        const bulge = 1.0 + 0.42 * Math.sin(u * Math.PI);
+        pos.setX(i, pos.getX(i) * bulge);
+        pos.setZ(i, pos.getZ(i) * bulge);
+      }
+      geo.computeVertexNormals();
+      return geo;
+    }
 
     for (const p of picks) {
       const g = new T.Group();
-      const drop = 0.26 + R() * 0.12;
-      // 吊绳
-      const cord = new T.Mesh(new T.CylinderGeometry(0.013, 0.013, drop, 5), cordMat);
+      const drop = 0.28 + R() * 0.14;
+      const R0 = 0.046 + R() * 0.012;
+      const H = 0.102 + R() * 0.024;
+
+      // 吊绳（上端直接连到枝条采样点）
+      const cord = new T.Mesh(new T.CylinderGeometry(0.012, 0.012, drop, 6), cordMat);
       cord.position.set(p.x, p.y - drop / 2, p.z);
       g.add(cord);
-      // 灯身
-      const R0 = 0.052 + R() * 0.022;
-      const H = 0.10 + R() * 0.05;
-      const body = new T.Mesh(new T.CylinderGeometry(R0, R0, H, 10), bodyMat);
+
+      // 圆润灯身
+      const body = new T.Mesh(makeChochinGeo(R0, H), bodyMat);
       body.position.set(p.x, p.y - drop - H / 2, p.z);
       g.add(body);
-      // 上下盖
-      const capT = new T.Mesh(new T.CylinderGeometry(R0 * 0.72, R0 * 0.72, 0.022, 10), capMat);
-      capT.position.set(p.x, p.y - drop - 0.005, p.z);
+
+      // 上下深木箍盖
+      const capT = new T.Mesh(new T.CylinderGeometry(R0 * 0.66, R0 * 0.76, 0.018, 12), capMat);
+      capT.position.set(p.x, p.y - drop - 0.003, p.z);
       g.add(capT);
-      const capB = capT.clone();
-      capB.position.set(p.x, p.y - drop - H + 0.005, p.z);
+      const capB = new T.Mesh(new T.CylinderGeometry(R0 * 0.76, R0 * 0.64, 0.018, 12), capMat);
+      capB.position.set(p.x, p.y - drop - H + 0.003, p.z);
       g.add(capB);
-      // 底部一点暖光
-      const bulb = new T.Mesh(new T.SphereGeometry(0.020, 8, 6), new T.MeshBasicMaterial({ color: 0xffd9a0 }));
-      bulb.position.set(p.x, p.y - drop - H + 0.02, p.z);
-      g.add(bulb);
+
+      // 底部垂穗（流苏），增加剪影细节
+      const tasselH = 0.042;
+      const tassel = new T.Mesh(new T.CylinderGeometry(0.005, 0.011, tasselH, 6), tasselMat);
+      tassel.position.set(p.x, p.y - drop - H - tasselH / 2 + 0.002, p.z);
+      g.add(tassel);
+
       g.userData.isLantern = true;
       lanternGroups.push(g);
       treeGroup.add(g);
